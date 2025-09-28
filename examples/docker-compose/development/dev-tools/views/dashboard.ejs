@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><%= title %></title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+            min-height: 100vh;
+            padding: 1rem;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .status-badge {
+            background: #4CAF50;
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            display: inline-block;
+            margin-bottom: 1rem;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        .card {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 1.5rem;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+        .card h3 {
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .icon {
+            font-size: 1.5rem;
+        }
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 1rem;
+        }
+        .stat {
+            text-align: center;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 1rem;
+            border-radius: 10px;
+        }
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        .stat-label {
+            font-size: 0.8rem;
+            opacity: 0.8;
+        }
+        .container-list {
+            list-style: none;
+        }
+        .container-item {
+            background: rgba(255, 255, 255, 0.1);
+            margin: 0.5rem 0;
+            padding: 1rem;
+            border-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .container-status {
+            padding: 0.25rem 0.5rem;
+            border-radius: 12px;
+            font-size: 0.8rem;
+        }
+        .status-running { background: #4CAF50; }
+        .status-stopped { background: #f44336; }
+        .log-container {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            padding: 1rem;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 0.85rem;
+        }
+        .log-entry {
+            margin: 0.25rem 0;
+            padding: 0.25rem;
+            border-left: 3px solid transparent;
+        }
+        .log-info { border-left-color: #2196F3; }
+        .log-warn { border-left-color: #FF9800; }
+        .log-error { border-left-color: #f44336; }
+        .log-debug { border-left-color: #9C27B0; }
+        .timestamp {
+            color: #888;
+            font-size: 0.8rem;
+        }
+        .service-tag {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 0.1rem 0.3rem;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            margin-left: 0.5rem;
+        }
+        .controls {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }
+        .btn {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-1px);
+        }
+        .btn-primary { background: #4CAF50; }
+        .btn-warning { background: #FF9800; }
+        .btn-danger { background: #f44336; }
+        .metrics-chart {
+            height: 100px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-top: 1rem;
+            display: flex;
+            align-items: end;
+            justify-content: space-around;
+        }
+        .chart-bar {
+            background: #4CAF50;
+            width: 8px;
+            border-radius: 4px 4px 0 0;
+            transition: height 0.3s ease;
+        }
+        .full-width {
+            grid-column: 1 / -1;
+        }
+        .two-column {
+            grid-column: span 2;
+        }
+        .connection-status {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            background: #4CAF50;
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            z-index: 1000;
+        }
+        .disconnected {
+            background: #f44336;
+        }
+    </style>
+</head>
+<body>
+    <div class="connection-status" id="connectionStatus">
+        🔗 Connected
+    </div>
+
+    <div class="header">
+        <div class="status-badge">🛠️ Development Tools</div>
+        <h1><%= title %></h1>
+        <p>Real-time monitoring and development utilities</p>
+    </div>
+
+    <div class="grid">
+        <!-- System Stats -->
+        <div class="card">
+            <h3><span class="icon">💻</span> System Statistics</h3>
+            <div class="stat-grid" id="systemStats">
+                <div class="stat">
+                    <div class="stat-value" id="cpuUsage">--</div>
+                    <div class="stat-label">CPU %</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value" id="memoryUsage">--</div>
+                    <div class="stat-label">Memory</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value" id="uptime">--</div>
+                    <div class="stat-label">Uptime</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value" id="loadAvg">--</div>
+                    <div class="stat-label">Load Avg</div>
+                </div>
+            </div>
+            <div class="metrics-chart" id="cpuChart">
+                <!-- CPU usage chart bars will be inserted here -->
+            </div>
+        </div>
+
+        <!-- Container Status -->
+        <div class="card">
+            <h3><span class="icon">📦</span> Container Status</h3>
+            <ul class="container-list" id="containerList">
+                <% containerStats.forEach(container => { %>
+                <li class="container-item">
+                    <div>
+                        <strong><%= container.name %></strong>
+                        <div>CPU: <%= Math.round(container.cpu * 10) / 10 %>% | Memory: <%= Math.round(container.memory / 1024 / 1024) %>MB</div>
+                    </div>
+                    <span class="container-status status-<%= container.status %>"><%= container.status %></span>
+                </li>
+                <% }); %>
+            </ul>
+            <div class="controls">
+                <button class="btn btn-primary" onclick="restartService('all')">Restart All</button>
+                <button class="btn btn-warning" onclick="refreshStats()">Refresh</button>
+            </div>
+        </div>
+
+        <!-- Recent Logs -->
+        <div class="card full-width">
+            <h3><span class="icon">📝</span> Recent Logs</h3>
+            <div class="log-container" id="logContainer">
+                <% recentLogs.forEach(log => { %>
+                <div class="log-entry log-<%= log.level %>">
+                    <span class="timestamp"><%= new Date(log.timestamp).toLocaleTimeString() %></span>
+                    <span class="service-tag"><%= log.service %></span>
+                    <%= log.message %>
+                </div>
+                <% }); %>
+            </div>
+            <div class="controls">
+                <button class="btn btn-primary" onclick="clearLogs()">Clear Logs</button>
+                <button class="btn" onclick="exportLogs()">Export</button>
+                <button class="btn" onclick="toggleAutoScroll()">Auto-scroll: ON</button>
+            </div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="card">
+            <h3><span class="icon">⚡</span> Quick Actions</h3>
+            <div class="controls" style="flex-direction: column; gap: 0.5rem;">
+                <button class="btn btn-primary" onclick="window.open('http://api.localhost', '_blank')">Open API</button>
+                <button class="btn btn-primary" onclick="window.open('http://app.localhost', '_blank')">Open Frontend</button>
+                <button class="btn btn-primary" onclick="window.open('http://docs.localhost', '_blank')">Open Docs</button>
+                <button class="btn btn-primary" onclick="window.open('http://localhost:8025', '_blank')">Mailhog</button>
+                <button class="btn btn-warning" onclick="hotReload()">Trigger Hot Reload</button>
+                <button class="btn btn-danger" onclick="resetDevData()">Reset Dev Data</button>
+            </div>
+        </div>
+
+        <!-- File Watcher -->
+        <div class="card">
+            <h3><span class="icon">👁️</span> File Watcher</h3>
+            <div id="fileChanges">
+                <p>Watching for file changes...</p>
+            </div>
+            <div class="controls">
+                <button class="btn btn-primary" onclick="startWatcher()">Start Watching</button>
+                <button class="btn btn-warning" onclick="stopWatcher()">Stop</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Socket.IO connection
+        const socket = io();
+        let autoScroll = true;
+        let cpuHistory = [];
+
+        // Connection status
+        socket.on('connect', () => {
+            document.getElementById('connectionStatus').innerHTML = '🔗 Connected';
+            document.getElementById('connectionStatus').classList.remove('disconnected');
+        });
+
+        socket.on('disconnect', () => {
+            document.getElementById('connectionStatus').innerHTML = '❌ Disconnected';
+            document.getElementById('connectionStatus').classList.add('disconnected');
+        });
+
+        // Real-time stats updates
+        socket.on('statsUpdate', (data) => {
+            updateSystemStats(data.system);
+            updateContainerStats(data.containers);
+        });
+
+        // Real-time log updates
+        socket.on('newLog', (logEntry) => {
+            addLogEntry(logEntry);
+        });
+
+        // File change notifications
+        socket.on('fileChange', (change) => {
+            addFileChange(change);
+            showNotification(`File changed: ${change.path}`);
+        });
+
+        function updateSystemStats(stats) {
+            document.getElementById('cpuUsage').textContent = Math.round(stats.cpuUsage) + '%';
+            document.getElementById('memoryUsage').textContent = formatBytes(stats.memory.rss);
+            document.getElementById('uptime').textContent = formatUptime(stats.uptime);
+            document.getElementById('loadAvg').textContent = stats.loadAverage[0].toFixed(2);
+
+            // Update CPU chart
+            cpuHistory.push(stats.cpuUsage);
+            if (cpuHistory.length > 20) cpuHistory.shift();
+            updateCpuChart();
+        }
+
+        function updateContainerStats(containers) {
+            const containerList = document.getElementById('containerList');
+            containerList.innerHTML = containers.map(container => `
+                <li class="container-item">
+                    <div>
+                        <strong>${container.name}</strong>
+                        <div>CPU: ${Math.round(container.cpu * 10) / 10}% | Memory: ${Math.round(container.memory / 1024 / 1024)}MB</div>
+                    </div>
+                    <span class="container-status status-${container.status}">${container.status}</span>
+                </li>
+            `).join('');
+        }
+
+        function updateCpuChart() {
+            const chartContainer = document.getElementById('cpuChart');
+            chartContainer.innerHTML = cpuHistory.map(value => 
+                `<div class="chart-bar" style="height: ${value}%"></div>`
+            ).join('');
+        }
+
+        function addLogEntry(logEntry) {
+            const logContainer = document.getElementById('logContainer');
+            const logElement = document.createElement('div');
+            logElement.className = `log-entry log-${logEntry.level}`;
+            logElement.innerHTML = `
+                <span class="timestamp">${new Date(logEntry.timestamp).toLocaleTimeString()}</span>
+                <span class="service-tag">${logEntry.service}</span>
+                ${logEntry.message}
+            `;
+            
+            logContainer.appendChild(logElement);
+            
+            // Auto-scroll to bottom
+            if (autoScroll) {
+                logContainer.scrollTop = logContainer.scrollHeight;
+            }
+            
+            // Keep only last 100 log entries
+            while (logContainer.children.length > 100) {
+                logContainer.removeChild(logContainer.firstChild);
+            }
+        }
+
+        function addFileChange(change) {
+            const fileChanges = document.getElementById('fileChanges');
+            const changeElement = document.createElement('div');
+            changeElement.innerHTML = `
+                <small>${new Date(change.timestamp).toLocaleTimeString()}</small>
+                <strong>${change.type}:</strong> ${change.path}
+            `;
+            fileChanges.appendChild(changeElement);
+            
+            // Keep only last 10 changes
+            while (fileChanges.children.length > 10) {
+                fileChanges.removeChild(fileChanges.firstChild);
+            }
+        }
+
+        // Utility functions
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        function formatUptime(seconds) {
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            return `${hours}h ${minutes}m`;
+        }
+
+        function showNotification(message) {
+            // Simple notification system
+            const notification = document.createElement('div');
+            notification.style.cssText = `
+                position: fixed; top: 4rem; right: 1rem; z-index: 1000;
+                background: #4CAF50; color: white; padding: 1rem;
+                border-radius: 8px; animation: slideIn 0.3s ease;
+            `;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+            
+            setTimeout(() => {
+                notification.remove();
+            }, 3000);
+        }
+
+        // Action functions
+        function restartService(serviceName) {
+            fetch('/api/restart', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({service: serviceName})
+            }).then(() => {
+                showNotification(`Restart signal sent to ${serviceName}`);
+            });
+        }
+
+        function refreshStats() {
+            socket.emit('requestStats');
+            showNotification('Stats refreshed');
+        }
+
+        function clearLogs() {
+            document.getElementById('logContainer').innerHTML = '';
+            showNotification('Logs cleared');
+        }
+
+        function exportLogs() {
+            fetch('/api/logs')
+                .then(response => response.json())
+                .then(data => {
+                    const blob = new Blob([JSON.stringify(data.logs, null, 2)], {type: 'application/json'});
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `logs-${new Date().toISOString()}.json`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    showNotification('Logs exported');
+                });
+        }
+
+        function toggleAutoScroll() {
+            autoScroll = !autoScroll;
+            const btn = event.target;
+            btn.textContent = `Auto-scroll: ${autoScroll ? 'ON' : 'OFF'}`;
+            showNotification(`Auto-scroll ${autoScroll ? 'enabled' : 'disabled'}`);
+        }
+
+        function hotReload() {
+            showNotification('Hot reload triggered');
+            setTimeout(() => window.location.reload(), 1000);
+        }
+
+        function resetDevData() {
+            if (confirm('Reset all development data?')) {
+                fetch('/api/dev/reset')
+                    .then(() => showNotification('Development data reset'));
+            }
+        }
+
+        function startWatcher() {
+            fetch('/api/watch/start?path=/app')
+                .then(() => showNotification('File watcher started'));
+        }
+
+        function stopWatcher() {
+            showNotification('File watcher stopped');
+        }
+
+        // Request initial stats
+        socket.emit('requestStats');
+    </script>
+</body>
+</html>

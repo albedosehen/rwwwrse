@@ -1,0 +1,287 @@
+# Microservices Docker Compose setup for rwwwrse reverse proxy
+# This example demonstrates complex routing with multiple backend services
+
+version: '3.8'
+
+services:
+  rwwwrse:
+    image: ghcr.io/albedosehen/rwwwrse:latest
+    container_name: rwwwrse-microservices
+    ports:
+      - "80:8080"      # HTTP port
+      - "443:8443"     # HTTPS port  
+      - "9090:9090"    # Metrics port
+    environment:
+      # Basic server configuration
+      RWWWRSE_SERVER_HOST: "0.0.0.0"
+      RWWWRSE_SERVER_PORT: "8080"
+      RWWWRSE_SERVER_HTTPS_PORT: "8443"
+      
+      # TLS configuration - set to true for production
+      RWWWRSE_TLS_ENABLED: "true"
+      RWWWRSE_TLS_AUTO_CERT: "false"  # Set to true with real domains
+      RWWWRSE_TLS_EMAIL: "admin@example.com"
+      RWWWRSE_TLS_DOMAINS: "api.example.com,auth.example.com,web.example.com,admin.example.com"
+      
+      # Complex backend routing configuration
+      RWWWRSE_BACKENDS_ROUTES: >
+        {
+          "api.example.com": {
+            "url": "http://api-service:8080",
+            "health_path": "/health",
+            "timeout": "30s",
+            "max_idle_conns": 100,
+            "max_idle_per_host": 20,
+            "dial_timeout": "10s"
+          },
+          "auth.example.com": {
+            "url": "http://auth-service:8080",
+            "health_path": "/status",
+            "timeout": "15s",
+            "max_idle_conns": 50,
+            "max_idle_per_host": 10,
+            "dial_timeout": "5s"
+          },
+          "web.example.com": {
+            "url": "http://web-frontend:3000",
+            "health_path": "/",
+            "timeout": "30s",
+            "max_idle_conns": 100,
+            "max_idle_per_host": 20,
+            "dial_timeout": "10s"
+          },
+          "admin.example.com": {
+            "url": "http://admin-panel:8080",
+            "health_path": "/health",
+            "timeout": "30s",
+            "max_idle_conns": 50,
+            "max_idle_per_host": 10,
+            "dial_timeout": "10s"
+          },
+          "localhost": {
+            "url": "http://web-frontend:3000",
+            "health_path": "/",
+            "timeout": "30s"
+          }
+        }
+      
+      # Enhanced logging configuration
+      RWWWRSE_LOGGING_LEVEL: "info"
+      RWWWRSE_LOGGING_FORMAT: "json"
+      
+      # Health check configuration
+      RWWWRSE_HEALTH_ENABLED: "true"
+      RWWWRSE_HEALTH_INTERVAL: "30s"
+      RWWWRSE_HEALTH_TIMEOUT: "5s"
+      RWWWRSE_HEALTH_UNHEALTHY_THRESHOLD: "3"
+      RWWWRSE_HEALTH_HEALTHY_THRESHOLD: "2"
+      
+      # Metrics configuration
+      RWWWRSE_METRICS_ENABLED: "true"
+      RWWWRSE_METRICS_PORT: "9090"
+      RWWWRSE_METRICS_PATH: "/metrics"
+      
+      # Security configuration
+      RWWWRSE_SECURITY_RATE_LIMIT_ENABLED: "true"
+      RWWWRSE_SECURITY_RATE_LIMIT_REQUESTS_PER_SECOND: "100"
+      RWWWRSE_SECURITY_RATE_LIMIT_BURST_SIZE: "200"
+      RWWWRSE_SECURITY_CORS_ENABLED: "true"
+      RWWWRSE_SECURITY_CORS_ORIGINS: "https://web.example.com,https://admin.example.com"
+      
+    depends_on:
+      - api-service
+      - auth-service
+      - web-frontend
+      - admin-panel
+    networks:
+      - frontend
+      - monitoring
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # API Service - RESTful API backend
+  api-service:
+    image: kennethreitz/httpbin  # Using httpbin as a mock API service
+    container_name: api-service
+    environment:
+      - PORT=8080
+    networks:
+      - frontend
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      - "service.name=api"
+      - "service.version=1.0.0"
+      - "service.environment=development"
+
+  # Authentication Service
+  auth-service:
+    image: nginx:alpine
+    container_name: auth-service
+    volumes:
+      - ./services/auth/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./services/auth/html:/usr/share/nginx/html:ro
+    networks:
+      - frontend
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      - "service.name=auth"
+      - "service.version=1.0.0"
+      - "service.environment=development"
+
+  # Web Frontend Service
+  web-frontend:
+    image: nginx:alpine
+    container_name: web-frontend
+    volumes:
+      - ./services/web/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./services/web/html:/usr/share/nginx/html:ro
+    networks:
+      - frontend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      - "service.name=web"
+      - "service.version=1.0.0"
+      - "service.environment=development"
+
+  # Admin Panel Service
+  admin-panel:
+    image: adminer
+    container_name: admin-panel
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres-db
+      ADMINER_DESIGN: pepa-linha
+    networks:
+      - frontend
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      - "service.name=admin"
+      - "service.version=1.0.0"
+      - "service.environment=development"
+
+  # PostgreSQL Database
+  postgres-db:
+    image: postgres:15-alpine
+    container_name: postgres-db
+    environment:
+      POSTGRES_DB: microservices
+      POSTGRES_USER: dbuser
+      POSTGRES_PASSWORD: dbpass
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dbuser -d microservices"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      - "service.name=postgres"
+      - "service.version=15"
+      - "service.environment=development"
+
+  # Redis Cache
+  redis-cache:
+    image: redis:7-alpine
+    container_name: redis-cache
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      - "service.name=redis"
+      - "service.version=7"
+      - "service.environment=development"
+
+  # Message Queue (RabbitMQ)
+  message-queue:
+    image: rabbitmq:3-management-alpine
+    container_name: message-queue
+    environment:
+      RABBITMQ_DEFAULT_USER: mquser
+      RABBITMQ_DEFAULT_PASS: mqpass
+      RABBITMQ_DEFAULT_VHOST: microservices
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - backend
+    ports:
+      - "15672:15672"  # Management UI (for development only)
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmqctl", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "service.name=rabbitmq"
+      - "service.version=3"
+      - "service.environment=development"
+
+volumes:
+  postgres_data:
+    name: microservices_postgres_data
+  redis_data:
+    name: microservices_redis_data
+  rabbitmq_data:
+    name: microservices_rabbitmq_data
+
+networks:
+  frontend:
+    driver: bridge
+    name: microservices-frontend
+    labels:
+      - "network.type=frontend"
+      - "network.environment=development"
+  
+  backend:
+    driver: bridge
+    name: microservices-backend
+    labels:
+      - "network.type=backend"
+      - "network.environment=development"
+  
+  monitoring:
+    driver: bridge
+    name: microservices-monitoring
+    labels:
+      - "network.type=monitoring"
+      - "network.environment=development"

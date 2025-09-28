@@ -1,0 +1,560 @@
+# NGINX Ingress Controller Configuration for rwwwrse
+# This file configures rwwwrse for deployment with NGINX Ingress Controller
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rwwwrse-nginx-config
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: config
+    version: v1.0.0
+    environment: nginx-ingress
+    managed-by: kubectl
+  annotations:
+    kubernetes.io/description: "rwwwrse configuration for NGINX Ingress Controller deployment"
+    config.kubernetes.io/local-config: "true"
+    nginx.ingress.kubernetes.io/configuration-snippet: "proxy_cache_valid 200 1h;"
+data:
+  # Server Configuration
+  RWWWRSE_PORT: "8080"
+  RWWWRSE_HOST: "0.0.0.0"
+  RWWWRSE_READ_TIMEOUT: "30s"
+  RWWWRSE_WRITE_TIMEOUT: "30s"
+  RWWWRSE_IDLE_TIMEOUT: "120s"
+  RWWWRSE_MAX_HEADER_BYTES: "1048576"
+  RWWWRSE_GRACEFUL_TIMEOUT: "30s"
+
+  # TLS Configuration (handled by NGINX Ingress)
+  RWWWRSE_TLS_ENABLED: "false"  # NGINX handles TLS termination
+  RWWWRSE_TLS_AUTO_CERT: "false"  # cert-manager handles certificates
+  RWWWRSE_TLS_CERT_DIR: "/tmp/certs"
+  RWWWRSE_TLS_HOST_POLICY: "allow_all"  # NGINX handles host routing
+  RWWWRSE_TLS_HOSTS: ""  # Not needed with ingress
+  RWWWRSE_TLS_EMAIL: ""  # Set in cert-manager issuer
+  
+  # Logging Configuration
+  RWWWRSE_LOG_LEVEL: "info"
+  RWWWRSE_LOG_FORMAT: "json"
+  RWWWRSE_LOG_OUTPUT: "stdout"
+  RWWWRSE_LOG_TIMESTAMP: "true"
+  RWWWRSE_LOG_CALLER: "false"
+  RWWWRSE_ACCESS_LOG_ENABLED: "true"
+  RWWWRSE_ACCESS_LOG_FORMAT: "json"
+
+  # Health Check Configuration
+  RWWWRSE_HEALTH_ENABLED: "true"
+  RWWWRSE_HEALTH_PATH: "/health"
+  RWWWRSE_HEALTH_INTERVAL: "30s"
+  RWWWRSE_HEALTH_TIMEOUT: "10s"
+  
+  # Metrics Configuration
+  RWWWRSE_METRICS_ENABLED: "true"
+  RWWWRSE_METRICS_PATH: "/metrics"
+  RWWWRSE_METRICS_NAMESPACE: "rwwwrse"
+  RWWWRSE_METRICS_SUBSYSTEM: "proxy"
+
+  # Rate Limiting Configuration (coordinated with NGINX)
+  RWWWRSE_RATE_LIMIT_ENABLED: "true"
+  RWWWRSE_RATE_LIMIT_REQUESTS: "500"  # Lower since NGINX also rate limits
+  RWWWRSE_RATE_LIMIT_WINDOW: "1m"
+  RWWWRSE_RATE_LIMIT_BURST: "50"
+  
+  # CORS Configuration (can be handled by NGINX or rwwwrse)
+  RWWWRSE_CORS_ENABLED: "false"  # NGINX handles CORS
+  RWWWRSE_CORS_ALLOWED_ORIGINS: ""
+  RWWWRSE_CORS_ALLOWED_METHODS: ""
+  RWWWRSE_CORS_ALLOWED_HEADERS: ""
+  RWWWRSE_CORS_ALLOW_CREDENTIALS: "false"
+  RWWWRSE_CORS_MAX_AGE: "0"
+
+  # Security Headers Configuration (handled by NGINX)
+  RWWWRSE_SECURITY_HEADERS_ENABLED: "false"  # NGINX handles security headers
+  RWWWRSE_HSTS_ENABLED: "false"
+  RWWWRSE_HSTS_MAX_AGE: "0"
+  RWWWRSE_HSTS_INCLUDE_SUBDOMAINS: "false"
+  RWWWRSE_HSTS_PRELOAD: "false"
+  RWWWRSE_CONTENT_TYPE_NOSNIFF: "false"
+  RWWWRSE_FRAME_OPTIONS: ""
+  RWWWRSE_XSS_PROTECTION: ""
+  RWWWRSE_REFERRER_POLICY: ""
+
+  # Compression Configuration (can be handled by NGINX or rwwwrse)
+  RWWWRSE_COMPRESSION_ENABLED: "false"  # NGINX handles compression
+  RWWWRSE_COMPRESSION_LEVEL: "0"
+  RWWWRSE_COMPRESSION_MIN_SIZE: "0"
+  RWWWRSE_COMPRESSION_TYPES: ""
+
+  # Circuit Breaker Configuration
+  RWWWRSE_CIRCUIT_BREAKER_ENABLED: "true"
+  RWWWRSE_CIRCUIT_BREAKER_THRESHOLD: "10"
+  RWWWRSE_CIRCUIT_BREAKER_TIMEOUT: "60s"
+  RWWWRSE_CIRCUIT_BREAKER_MAX_REQUESTS: "5"
+
+  # Load Balancing Configuration
+  RWWWRSE_LB_STRATEGY: "round_robin"
+  RWWWRSE_LB_HEALTH_CHECK_ENABLED: "true"
+  RWWWRSE_LB_HEALTH_CHECK_INTERVAL: "30s"
+  RWWWRSE_LB_HEALTH_CHECK_TIMEOUT: "10s"
+  RWWWRSE_LB_HEALTH_CHECK_PATH: "/health"
+
+  # Retry Configuration
+  RWWWRSE_RETRY_ENABLED: "true"
+  RWWWRSE_RETRY_MAX_ATTEMPTS: "3"
+  RWWWRSE_RETRY_INITIAL_INTERVAL: "1s"
+  RWWWRSE_RETRY_MAX_INTERVAL: "10s"
+  RWWWRSE_RETRY_MULTIPLIER: "2"
+
+  # Request ID Configuration
+  RWWWRSE_REQUEST_ID_ENABLED: "true"
+  RWWWRSE_REQUEST_ID_HEADER: "X-Request-ID"
+  RWWWRSE_REQUEST_ID_GENERATOR: "uuid"
+
+  # NGINX Ingress specific configuration
+  RWWWRSE_INGRESS_CONTROLLER: "nginx"
+  RWWWRSE_BEHIND_PROXY: "true"
+  RWWWRSE_TRUST_PROXY: "true"
+  RWWWRSE_PROXY_PROTOCOL: "false"  # NGINX handles proxy protocol
+  RWWWRSE_FORWARDED_HEADERS: "true"
+
+  # Kubernetes-Specific Configuration
+  RWWWRSE_K8S_NAMESPACE: "rwwwrse"
+  RWWWRSE_K8S_SERVICE_NAME: "rwwwrse"
+  RWWWRSE_K8S_POD_NAME: ""  # Injected by downward API
+  RWWWRSE_K8S_NODE_NAME: ""  # Injected by downward API
+
+  # Target Configuration
+  RWWWRSE_TARGETS: |
+    {
+      "api.example.com": {
+        "backends": [
+          "http://api-service.default.svc.cluster.local:3000"
+        ],
+        "health_check": {
+          "enabled": true,
+          "path": "/health",
+          "interval": "30s",
+          "timeout": "10s"
+        },
+        "retry": {
+          "enabled": true,
+          "max_attempts": 3,
+          "initial_interval": "1s"
+        },
+        "circuit_breaker": {
+          "enabled": true,
+          "threshold": 10,
+          "timeout": "60s"
+        },
+        "rate_limit": {
+          "enabled": true,
+          "requests": 200,
+          "window": "1m"
+        },
+        "nginx_annotations": {
+          "proxy_read_timeout": "60s",
+          "proxy_connect_timeout": "30s",
+          "client_max_body_size": "10m"
+        }
+      },
+      "app.example.com": {
+        "backends": [
+          "http://frontend-service.default.svc.cluster.local:80"
+        ],
+        "health_check": {
+          "enabled": true,
+          "path": "/",
+          "interval": "30s",
+          "timeout": "10s"
+        },
+        "static": {
+          "enabled": true,
+          "cache_control": "public, max-age=3600"
+        },
+        "nginx_annotations": {
+          "proxy_cache": "static-cache",
+          "proxy_cache_valid": "200 1h",
+          "expires": "1h"
+        }
+      },
+      "web.example.com": {
+        "backends": [
+          "http://web-service.default.svc.cluster.local:8080"
+        ],
+        "health_check": {
+          "enabled": true,
+          "path": "/health",
+          "interval": "30s",
+          "timeout": "10s"
+        },
+        "middleware": {
+          "compression": false,
+          "security_headers": false,
+          "cors": false
+        },
+        "nginx_annotations": {
+          "upstream_hash_by": "$request_uri",
+          "load_balance": "round_robin"
+        }
+      },
+      "admin.example.com": {
+        "backends": [
+          "http://admin-service.default.svc.cluster.local:9000"
+        ],
+        "health_check": {
+          "enabled": true,
+          "path": "/admin/health",
+          "interval": "30s",
+          "timeout": "10s"
+        },
+        "auth": {
+          "enabled": true,
+          "type": "jwt",
+          "secret_key_env": "JWT_SECRET"
+        },
+        "rate_limit": {
+          "enabled": true,
+          "requests": 50,
+          "window": "1m"
+        },
+        "nginx_annotations": {
+          "auth_type": "basic",
+          "auth_secret": "admin-auth",
+          "whitelist_source_range": "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+        }
+      }
+    }
+
+  # NGINX Ingress Controller Configuration
+  RWWWRSE_NGINX_CONFIG: |
+    {
+      "global": {
+        "server_tokens": false,
+        "hide_headers": ["Server", "X-Powered-By"],
+        "proxy_buffer_size": "4k",
+        "proxy_buffers": "8 4k",
+        "proxy_busy_buffers_size": "8k",
+        "client_max_body_size": "10m",
+        "client_body_timeout": "60s",
+        "client_header_timeout": "60s",
+        "keepalive_timeout": "65s",
+        "send_timeout": "60s"
+      },
+      "ssl": {
+        "protocols": "TLSv1.2 TLSv1.3",
+        "ciphers": "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384",
+        "prefer_server_ciphers": true,
+        "session_cache": "shared:SSL:10m",
+        "session_timeout": "10m"
+      },
+      "security": {
+        "hide_headers": ["Server", "X-Powered-By"],
+        "add_headers": {
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Content-Type-Options": "nosniff",
+          "X-XSS-Protection": "1; mode=block",
+          "Referrer-Policy": "strict-origin-when-cross-origin",
+          "Strict-Transport-Security": "max-age=31536000; includeSubDomains"
+        }
+      },
+      "compression": {
+        "enabled": true,
+        "level": 6,
+        "min_length": 1024,
+        "types": [
+          "text/html",
+          "text/css",
+          "text/javascript",
+          "application/javascript",
+          "application/json",
+          "application/xml",
+          "text/xml"
+        ]
+      },
+      "rate_limiting": {
+        "enabled": true,
+        "rate": "100r/m",
+        "burst": 20,
+        "nodelay": true
+      }
+    }
+
+---
+# Sample content for demo applications
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sample-content
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: sample-content
+    version: v1.0.0
+    ingress-controller: nginx
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>rwwwrse with NGINX Ingress Controller</title>
+        <style>
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+            
+            body {
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                line-height: 1.6;
+                color: #333;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            
+            .container {
+                background: white;
+                padding: 2rem;
+                border-radius: 10px;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+                text-align: center;
+                max-width: 600px;
+                margin: 2rem;
+            }
+            
+            .logo {
+                font-size: 3rem;
+                font-weight: bold;
+                background: linear-gradient(45deg, #009639, #00d4aa, #667eea, #764ba2);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                background-clip: text;
+                margin-bottom: 1rem;
+            }
+            
+            .subtitle {
+                color: #666;
+                font-size: 1.2rem;
+                margin-bottom: 2rem;
+            }
+            
+            .features {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+                gap: 1rem;
+                margin: 2rem 0;
+            }
+            
+            .feature {
+                padding: 1rem;
+                background: #f8f9fa;
+                border-radius: 8px;
+                border-left: 4px solid #009639;
+            }
+            
+            .feature h3 {
+                color: #009639;
+                margin-bottom: 0.5rem;
+            }
+            
+            .status {
+                margin: 2rem 0;
+                padding: 1rem;
+                background: #e8f5e8;
+                border-radius: 5px;
+                border-left: 4px solid #28a745;
+            }
+            
+            .nginx-badge {
+                display: inline-block;
+                background: #009639;
+                color: white;
+                padding: 0.5rem 1rem;
+                border-radius: 20px;
+                font-size: 0.9rem;
+                margin: 1rem 0;
+            }
+            
+            .links {
+                margin-top: 2rem;
+            }
+            
+            .links a {
+                display: inline-block;
+                margin: 0.5rem;
+                padding: 0.8rem 1.5rem;
+                background: #009639;
+                color: white;
+                text-decoration: none;
+                border-radius: 5px;
+                transition: background 0.3s;
+            }
+            
+            .links a:hover {
+                background: #007329;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="logo">rwwwrse</div>
+            <div class="subtitle">Reverse Proxy Server</div>
+            <div class="nginx-badge">🚀 Powered by NGINX Ingress Controller</div>
+            
+            <div class="status">
+                <strong>✅ Status:</strong> Successfully deployed with NGINX Ingress Controller
+            </div>
+            
+            <div class="features">
+                <div class="feature">
+                    <h3>🔒 SSL/TLS Termination</h3>
+                    <p>Automatic HTTPS with cert-manager and Let's Encrypt</p>
+                </div>
+                <div class="feature">
+                    <h3>⚡ High Performance</h3>
+                    <p>NGINX's proven performance and scalability</p>
+                </div>
+                <div class="feature">
+                    <h3>🛡️ Security</h3>
+                    <p>Rate limiting, CORS, and security headers</p>
+                </div>
+                <div class="feature">
+                    <h3>📊 Load Balancing</h3>
+                    <p>Advanced load balancing algorithms and health checks</p>
+                </div>
+                <div class="feature">
+                    <h3>📈 Auto Scaling</h3>
+                    <p>Horizontal Pod Autoscaler for traffic spikes</p>
+                </div>
+                <div class="feature">
+                    <h3>🔍 Observability</h3>
+                    <p>Prometheus metrics and structured logging</p>
+                </div>
+            </div>
+            
+            <div class="links">
+                <a href="/health">Health Check</a>
+                <a href="/metrics">Metrics</a>
+                <a href="https://kubernetes.github.io/ingress-nginx/" target="_blank">NGINX Ingress Docs</a>
+            </div>
+            
+            <p style="margin-top: 2rem; color: #666; font-size: 0.9rem;">
+                Deployment time: <span id="timestamp"></span>
+            </p>
+        </div>
+        
+        <script>
+            document.getElementById('timestamp').textContent = new Date().toLocaleString();
+            
+            // Health check display
+            fetch('/health')
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Health check:', data);
+                })
+                .catch(error => {
+                    console.log('Health check error:', error);
+                });
+        </script>
+    </body>
+    </html>
+
+  api.json: |
+    {
+      "service": "rwwwrse-sample-api",
+      "version": "1.0.0",
+      "platform": "Kubernetes with NGINX Ingress Controller",
+      "features": [
+        "SSL/TLS Termination",
+        "Rate Limiting",
+        "Load Balancing",
+        "Auto Scaling",
+        "Health Checks",
+        "Metrics Collection"
+      ],
+      "endpoints": {
+        "health": "/health",
+        "metrics": "/metrics",
+        "api": "/api/v1"
+      },
+      "ingress_features": {
+        "controller": "NGINX Ingress Controller",
+        "ssl_termination": true,
+        "rate_limiting": true,
+        "load_balancing": true,
+        "cors": true,
+        "compression": true,
+        "security_headers": true,
+        "cert_manager": true
+      }
+    }
+
+---
+# NGINX Ingress Controller ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-configuration
+  namespace: ingress-nginx
+  labels:
+    app.kubernetes.io/name: ingress-nginx
+    app.kubernetes.io/part-of: ingress-nginx
+data:
+  # Global NGINX configuration
+  enable-real-ip: "true"
+  proxy-real-ip-cidr: "0.0.0.0/0"
+  proxy-body-size: "10m"
+  proxy-connect-timeout: "30"
+  proxy-send-timeout: "60"
+  proxy-read-timeout: "60"
+  proxy-next-upstream: "error timeout http_502 http_503 http_504"
+  
+  # SSL configuration
+  ssl-protocols: "TLSv1.2 TLSv1.3"
+  ssl-ciphers: "ECDHE-ECDSA-AES128-GCM-SHA256,ECDHE-RSA-AES128-GCM-SHA256,ECDHE-ECDSA-AES256-GCM-SHA384,ECDHE-RSA-AES256-GCM-SHA384"
+  ssl-prefer-server-ciphers: "true"
+  ssl-session-cache: "shared:SSL:10m"
+  ssl-session-timeout: "10m"
+  
+  # Security headers
+  hide-headers: "Server,X-Powered-By"
+  add-headers: "rwwwrse/security-headers"
+  
+  # Performance tuning
+  worker-processes: "auto"
+  worker-connections: "1024"
+  keepalive-timeout: "65"
+  gzip-level: "6"
+  gzip-types: "text/css application/javascript text/javascript application/json application/xml text/xml"
+  
+  # Rate limiting
+  limit-rate-after: "1m"
+  limit-rate: "1000k"
+  
+  # Logging
+  log-format-json: '{"time": "$time_iso8601", "remote_addr": "$remote_addr", "x_forwarded_for": "$http_x_forwarded_for", "request": "$request", "status": $status, "body_bytes_sent": $body_bytes_sent, "request_time": $request_time, "http_referrer": "$http_referer", "http_user_agent": "$http_user_agent", "upstream_addr": "$upstream_addr", "upstream_response_time": "$upstream_response_time", "upstream_status": "$upstream_status", "request_id": "$req_id"}'
+  
+---
+# Security Headers ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: security-headers
+  namespace: ingress-nginx
+  labels:
+    app.kubernetes.io/name: ingress-nginx
+    app.kubernetes.io/part-of: ingress-nginx
+data:
+  X-Frame-Options: "SAMEORIGIN"
+  X-Content-Type-Options: "nosniff"
+  X-XSS-Protection: "1; mode=block"
+  Referrer-Policy: "strict-origin-when-cross-origin"
+  Strict-Transport-Security: "max-age=31536000; includeSubDomains; preload"
+  Content-Security-Policy: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'"
+  Permissions-Policy: "geolocation=(), microphone=(), camera=()"

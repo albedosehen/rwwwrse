@@ -1,0 +1,305 @@
+# Development Environment Docker Compose setup for rwwwrse
+# This setup is optimized for local development with hot reloading, debugging, and rapid iteration
+
+version: '3.8'
+
+services:
+  rwwwrse:
+    image: ghcr.io/albedosehen/rwwwrse:latest
+    container_name: rwwwrse-dev
+    ports:
+      - "80:8080"      # HTTP port
+      - "443:8443"     # HTTPS port (development SSL)
+      - "9090:9090"    # Metrics port
+      - "6060:6060"    # Profiling port (development only)
+    environment:
+      # Development server configuration
+      RWWWRSE_SERVER_HOST: "0.0.0.0"
+      RWWWRSE_SERVER_PORT: "8080"
+      RWWWRSE_SERVER_HTTPS_PORT: "8443"
+      
+      # Development TLS configuration (self-signed certs)
+      RWWWRSE_TLS_ENABLED: "true"
+      RWWWRSE_TLS_AUTO_CERT: "false"
+      RWWWRSE_TLS_CERT_FILE: "/certs/dev.crt"
+      RWWWRSE_TLS_KEY_FILE: "/certs/dev.key"
+      
+      # Development backend routing
+      RWWWRSE_BACKENDS_ROUTES: >
+        {
+          "api.localhost": {
+            "url": "http://api-dev:3000",
+            "health_path": "/health",
+            "timeout": "10s",
+            "max_idle_conns": 10,
+            "dial_timeout": "5s"
+          },
+          "app.localhost": {
+            "url": "http://frontend-dev:3000",
+            "health_path": "/",
+            "timeout": "10s",
+            "max_idle_conns": 10,
+            "dial_timeout": "5s"
+          },
+          "docs.localhost": {
+            "url": "http://docs-dev:8080",
+            "health_path": "/",
+            "timeout": "10s"
+          },
+          "tools.localhost": {
+            "url": "http://dev-tools:8080",
+            "health_path": "/health",
+            "timeout": "10s"
+          },
+          "localhost": {
+            "url": "http://frontend-dev:3000",
+            "health_path": "/",
+            "timeout": "10s"
+          }
+        }
+      
+      # Development logging (verbose for debugging)
+      RWWWRSE_LOGGING_LEVEL: "debug"
+      RWWWRSE_LOGGING_FORMAT: "console"
+      
+      # Relaxed health checks for development
+      RWWWRSE_HEALTH_ENABLED: "true"
+      RWWWRSE_HEALTH_INTERVAL: "10s"
+      RWWWRSE_HEALTH_TIMEOUT: "3s"
+      RWWWRSE_HEALTH_UNHEALTHY_THRESHOLD: "5"
+      RWWWRSE_HEALTH_HEALTHY_THRESHOLD: "1"
+      
+      # Development metrics
+      RWWWRSE_METRICS_ENABLED: "true"
+      RWWWRSE_METRICS_PORT: "9090"
+      RWWWRSE_METRICS_PATH: "/metrics"
+      
+      # Development profiling (enabled for performance analysis)
+      RWWWRSE_PROFILING_ENABLED: "true"
+      RWWWRSE_PROFILING_PORT: "6060"
+      
+      # Relaxed security for development
+      RWWWRSE_SECURITY_RATE_LIMIT_ENABLED: "false"
+      RWWWRSE_SECURITY_CORS_ENABLED: "true"
+      RWWWRSE_SECURITY_CORS_ORIGINS: "*"
+      RWWWRSE_SECURITY_CORS_CREDENTIALS: "true"
+      
+    volumes:
+      - ./certs:/certs:ro
+      - ./config:/config:ro
+    depends_on:
+      - api-dev
+      - frontend-dev
+      - docs-dev
+      - dev-tools
+    networks:
+      - dev-network
+    restart: unless-stopped
+    labels:
+      - "dev.service=reverse-proxy"
+      - "dev.hot-reload=true"
+
+  # Frontend Development Server (React/Vue/Angular with HMR)
+  frontend-dev:
+    image: node:18-alpine
+    container_name: frontend-dev
+    working_dir: /app
+    command: >
+      sh -c "
+        if [ ! -f package.json ]; then
+          npm init -y &&
+          npm install express cors helmet morgan &&
+          npm install -g nodemon
+        fi &&
+        nodemon --watch . --ext js,html,css,json server.js
+      "
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - HOT_RELOAD=true
+      - API_URL=http://api-dev:3000
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    ports:
+      - "3000:3000"  # Direct access for debugging
+    networks:
+      - dev-network
+    restart: unless-stopped
+    labels:
+      - "dev.service=frontend"
+      - "dev.hot-reload=true"
+      - "dev.auto-restart=true"
+
+  # API Development Server (Go/Node.js/Python with auto-reload)
+  api-dev:
+    image: node:18-alpine
+    container_name: api-dev
+    working_dir: /app
+    command: >
+      sh -c "
+        if [ ! -f package.json ]; then
+          npm init -y &&
+          npm install express cors helmet morgan body-parser jsonwebtoken bcryptjs &&
+          npm install -g nodemon
+        fi &&
+        nodemon --watch . --ext js,json server.js
+      "
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - DEBUG=*
+      - DATABASE_URL=postgresql://devuser:devpass@postgres-dev:5432/devdb
+      - REDIS_URL=redis://redis-dev:6379
+      - JWT_SECRET=dev-secret-key-not-for-production
+    volumes:
+      - ./api:/app
+      - api_node_modules:/app/node_modules
+    ports:
+      - "3001:3000"  # Direct access for API testing
+    depends_on:
+      - postgres-dev
+      - redis-dev
+    networks:
+      - dev-network
+    restart: unless-stopped
+    labels:
+      - "dev.service=api"
+      - "dev.hot-reload=true"
+      - "dev.auto-restart=true"
+
+  # Documentation Server (Gitbook/MkDocs/Docusaurus)
+  docs-dev:
+    image: nginx:alpine
+    container_name: docs-dev
+    volumes:
+      - ./docs/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./docs/html:/usr/share/nginx/html:ro
+    networks:
+      - dev-network
+    restart: unless-stopped
+    labels:
+      - "dev.service=docs"
+      - "dev.static=true"
+
+  # Development Tools Dashboard
+  dev-tools:
+    image: node:18-alpine
+    container_name: dev-tools
+    working_dir: /app
+    command: >
+      sh -c "
+        if [ ! -f package.json ]; then
+          npm init -y &&
+          npm install express ejs socket.io chokidar &&
+          npm install -g nodemon
+        fi &&
+        nodemon --watch . --ext js,json,ejs server.js
+      "
+    environment:
+      - NODE_ENV=development
+      - PORT=8080
+    volumes:
+      - ./dev-tools:/app
+      - dev_tools_node_modules:/app/node_modules
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # For container monitoring
+    ports:
+      - "8080:8080"  # Direct access to dev tools
+    networks:
+      - dev-network
+    restart: unless-stopped
+    labels:
+      - "dev.service=tools"
+      - "dev.monitoring=true"
+
+  # PostgreSQL Development Database
+  postgres-dev:
+    image: postgres:15-alpine
+    container_name: postgres-dev
+    environment:
+      POSTGRES_DB: devdb
+      POSTGRES_USER: devuser
+      POSTGRES_PASSWORD: devpass
+      POSTGRES_INITDB_ARGS: "--auth-host=md5"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./database/init-dev.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./database/seed-dev.sql:/docker-entrypoint-initdb.d/seed.sql:ro
+    ports:
+      - "5432:5432"  # Direct database access for development
+    networks:
+      - dev-network
+    restart: unless-stopped
+    labels:
+      - "dev.service=database"
+      - "dev.data=persistent"
+
+  # Redis Development Cache
+  redis-dev:
+    image: redis:7-alpine
+    container_name: redis-dev
+    command: redis-server --appendonly yes --requirepass devredispass
+    volumes:
+      - redis_dev_data:/data
+      - ./redis/redis-dev.conf:/usr/local/etc/redis/redis.conf:ro
+    ports:
+      - "6379:6379"  # Direct Redis access for development
+    networks:
+      - dev-network
+    restart: unless-stopped
+    labels:
+      - "dev.service=cache"
+      - "dev.data=persistent"
+
+  # Mailhog for email testing
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: mailhog-dev
+    ports:
+      - "1025:1025"  # SMTP
+      - "8025:8025"  # Web UI
+    networks:
+      - dev-network
+    restart: unless-stopped
+    labels:
+      - "dev.service=mail"
+      - "dev.testing=true"
+
+  # File Watcher for auto-reload coordination
+  file-watcher:
+    image: node:18-alpine
+    container_name: file-watcher
+    working_dir: /app
+    command: >
+      sh -c "
+        npm install -g chokidar-cli &&
+        chokidar '**/*' --ignore node_modules --command 'echo File changed: {path} at {time}'
+      "
+    volumes:
+      - .:/app:ro
+    networks:
+      - dev-network
+    restart: unless-stopped
+    labels:
+      - "dev.service=watcher"
+      - "dev.monitoring=true"
+
+volumes:
+  postgres_dev_data:
+    name: rwwwrse_dev_postgres_data
+  redis_dev_data:
+    name: rwwwrse_dev_redis_data
+  frontend_node_modules:
+    name: rwwwrse_dev_frontend_node_modules
+  api_node_modules:
+    name: rwwwrse_dev_api_node_modules
+  dev_tools_node_modules:
+    name: rwwwrse_dev_tools_node_modules
+
+networks:
+  dev-network:
+    driver: bridge
+    name: rwwwrse-dev-network
+    labels:
+      - "environment=development"
+      - "project=rwwwrse"

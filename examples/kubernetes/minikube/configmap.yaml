@@ -1,0 +1,334 @@
+# ConfigMap for rwwwrse configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rwwwrse-config
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: config
+data:
+  # rwwwrse configuration
+  RWWWRSE_LOG_LEVEL: "info"
+  RWWWRSE_LOG_FORMAT: "json"
+  RWWWRSE_METRICS_ENABLED: "true"
+  RWWWRSE_METRICS_PORT: "9090"
+  RWWWRSE_RATE_LIMIT: "100"
+  RWWWRSE_TIMEOUT: "30s"
+  RWWWRSE_HEALTH_CHECK_PATH: "/health"
+  RWWWRSE_HEALTH_CHECK_INTERVAL: "30s"
+  
+  # TLS configuration (for minikube development)
+  RWWWRSE_TLS_AUTO: "false"
+  RWWWRSE_TLS_CERT_FILE: "/etc/tls/tls.crt"
+  RWWWRSE_TLS_KEY_FILE: "/etc/tls/tls.key"
+  
+  # CORS configuration
+  RWWWRSE_CORS_ENABLED: "true"
+  RWWWRSE_CORS_ORIGINS: "*"
+  RWWWRSE_CORS_METHODS: "GET,POST,PUT,DELETE,OPTIONS"
+  RWWWRSE_CORS_HEADERS: "Content-Type,Authorization"
+  
+  # Security headers
+  RWWWRSE_SECURITY_HEADERS_ENABLED: "true"
+  
+  # Route configuration (will be mounted from routes configmap)
+  routes.yaml: |
+    routes:
+      - host: "app1.minikube.local"
+        target: "http://sample-app1:8080"
+        health_check: "/health"
+        timeout: "30s"
+        retry_attempts: 3
+        
+      - host: "app2.minikube.local"
+        target: "http://sample-app2:8080"
+        health_check: "/health"
+        timeout: "30s"
+        retry_attempts: 3
+        
+      - host: "api.minikube.local"
+        target: "http://sample-api:3000"
+        health_check: "/api/health"
+        timeout: "30s"
+        retry_attempts: 3
+        path_prefix: "/api"
+        
+      - host: "static.minikube.local"
+        target: "http://sample-static:80"
+        health_check: "/health"
+        timeout: "10s"
+        retry_attempts: 2
+        
+      # Default route for unmatched hosts
+      - host: "*"
+        target: "http://sample-app1:8080"
+        health_check: "/health"
+        timeout: "30s"
+        retry_attempts: 3
+
+---
+# ConfigMap for Prometheus monitoring
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: rwwwrse
+  labels:
+    app: prometheus
+    component: config
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    
+    scrape_configs:
+      - job_name: 'kubernetes-pods'
+        kubernetes_sd_configs:
+        - role: pod
+          namespaces:
+            names:
+            - rwwwrse
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+          action: keep
+          regex: true
+        - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+          action: replace
+          target_label: __metrics_path__
+          regex: (.+)
+        - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+          action: replace
+          regex: ([^:]+)(?::\d+)?;(\d+)
+          replacement: $1:$2
+          target_label: __address__
+        - action: labelmap
+          regex: __meta_kubernetes_pod_label_(.+)
+        - source_labels: [__meta_kubernetes_namespace]
+          action: replace
+          target_label: kubernetes_namespace
+        - source_labels: [__meta_kubernetes_pod_name]
+          action: replace
+          target_label: kubernetes_pod_name
+      
+      - job_name: 'rwwwrse'
+        static_configs:
+        - targets: ['rwwwrse:9090']
+        metrics_path: /metrics
+        scrape_interval: 10s
+        
+      - job_name: 'kubernetes-nodes'
+        kubernetes_sd_configs:
+        - role: node
+        relabel_configs:
+        - action: labelmap
+          regex: __meta_kubernetes_node_label_(.+)
+
+---
+# ConfigMap for sample applications
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sample-apps-config
+  namespace: rwwwrse
+  labels:
+    app: sample-apps
+    component: config
+data:
+  # Sample app1 configuration
+  app1-config.json: |
+    {
+      "app_name": "Sample App 1",
+      "version": "1.0.0",
+      "port": 8080,
+      "environment": "development",
+      "database_url": "inmemory://",
+      "log_level": "info",
+      "health_check_path": "/health",
+      "metrics_enabled": true
+    }
+  
+  # Sample app2 configuration  
+  app2-config.json: |
+    {
+      "app_name": "Sample App 2",
+      "version": "1.0.0",
+      "port": 8080,
+      "environment": "development",
+      "database_url": "inmemory://",
+      "log_level": "info",
+      "health_check_path": "/health",
+      "metrics_enabled": true
+    }
+    
+  # Sample API configuration
+  api-config.json: |
+    {
+      "app_name": "Sample API",
+      "version": "1.0.0",
+      "port": 3000,
+      "environment": "development",
+      "base_path": "/api",
+      "cors_enabled": true,
+      "rate_limit": 100,
+      "log_level": "info",
+      "health_check_path": "/api/health",
+      "metrics_enabled": true
+    }
+
+---
+# ConfigMap for nginx configuration (static content server)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: rwwwrse
+  labels:
+    app: nginx
+    component: config
+data:
+  nginx.conf: |
+    worker_processes auto;
+    error_log /var/log/nginx/error.log warn;
+    pid /var/run/nginx.pid;
+    
+    events {
+        worker_connections 1024;
+    }
+    
+    http {
+        include /etc/nginx/mime.types;
+        default_type application/octet-stream;
+        
+        log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                        '$status $body_bytes_sent "$http_referer" '
+                        '"$http_user_agent" "$http_x_forwarded_for"';
+        
+        access_log /var/log/nginx/access.log main;
+        
+        sendfile on;
+        tcp_nopush on;
+        tcp_nodelay on;
+        keepalive_timeout 65;
+        types_hash_max_size 2048;
+        
+        gzip on;
+        gzip_vary on;
+        gzip_min_length 1024;
+        gzip_types
+            application/atom+xml
+            application/javascript
+            application/json
+            application/ld+json
+            application/manifest+json
+            application/rss+xml
+            application/vnd.geo+json
+            application/vnd.ms-fontobject
+            application/x-font-ttf
+            application/x-web-app-manifest+json
+            application/xhtml+xml
+            application/xml
+            font/opentype
+            image/bmp
+            image/svg+xml
+            image/x-icon
+            text/cache-manifest
+            text/css
+            text/plain
+            text/vcard
+            text/vnd.rim.location.xloc
+            text/vtt
+            text/x-component
+            text/x-cross-domain-policy;
+        
+        server {
+            listen 80;
+            server_name localhost;
+            root /usr/share/nginx/html;
+            index index.html;
+            
+            location / {
+                try_files $uri $uri/ /index.html;
+            }
+            
+            location /health {
+                access_log off;
+                return 200 "healthy\n";
+                add_header Content-Type text/plain;
+            }
+            
+            location /metrics {
+                stub_status on;
+                access_log off;
+            }
+        }
+    }
+  
+  index.html: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Static Content Server - rwwwrse</title>
+        <style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                max-width: 800px;
+                margin: 0 auto;
+                padding: 20px;
+                line-height: 1.6;
+                color: #333;
+            }
+            .header {
+                text-align: center;
+                padding: 20px 0;
+                border-bottom: 2px solid #007acc;
+                margin-bottom: 30px;
+            }
+            .status {
+                background: #f0f8f0;
+                border-left: 4px solid #28a745;
+                padding: 15px;
+                margin: 20px 0;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>🌐 Static Content Server</h1>
+            <p>Served via rwwwrse reverse proxy on Kubernetes</p>
+        </div>
+        
+        <div class="status">
+            <h3>✅ Server Status: Running</h3>
+            <p>This static content is being served from a Kubernetes pod and proxied through rwwwrse.</p>
+        </div>
+        
+        <h2>📋 Deployment Information</h2>
+        <ul>
+            <li><strong>Platform:</strong> Kubernetes (Minikube)</li>
+            <li><strong>Proxy:</strong> rwwwrse</li>
+            <li><strong>Server:</strong> nginx</li>
+            <li><strong>Environment:</strong> Development</li>
+        </ul>
+        
+        <h2>🔗 Available Services</h2>
+        <ul>
+            <li><a href="http://app1.minikube.local">App 1</a> - Sample Application 1</li>
+            <li><a href="http://app2.minikube.local">App 2</a> - Sample Application 2</li>
+            <li><a href="http://api.minikube.local/api">API</a> - Sample API Service</li>
+            <li><a href="http://static.minikube.local">Static</a> - This static content server</li>
+        </ul>
+        
+        <script>
+            // Add timestamp
+            document.addEventListener('DOMContentLoaded', function() {
+                const timestamp = new Date().toISOString();
+                const statusDiv = document.querySelector('.status');
+                statusDiv.innerHTML += `<p><small>Last updated: ${timestamp}</small></p>`;
+            });
+        </script>
+    </body>
+    </html>

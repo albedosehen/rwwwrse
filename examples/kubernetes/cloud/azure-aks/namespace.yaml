@@ -1,0 +1,244 @@
+# Azure AKS Namespace Configuration for rwwwrse
+# This file creates a dedicated namespace for rwwwrse deployment on Azure Kubernetes Service (AKS)
+# with Azure-specific integrations and security configurations
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rwwwrse
+  labels:
+    # Standard Kubernetes labels
+    app.kubernetes.io/name: rwwwrse
+    app.kubernetes.io/instance: rwwwrse-production
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/component: reverse-proxy
+    app.kubernetes.io/part-of: rwwwrse-platform
+    app.kubernetes.io/managed-by: kubectl
+    
+    # Azure-specific labels
+    azure.workload.identity/use: "true"
+    azure.workload.identity/service-account-token-expiration: "3600"
+    
+    # Environment and deployment labels
+    environment: production
+    platform: azure-aks
+    deployment-method: kubernetes
+    
+    # Cost management and governance labels
+    cost-center: infrastructure
+    project: rwwwrse
+    team: platform-engineering
+    
+    # Monitoring and observability labels
+    monitoring.azure.com/enabled: "true"
+    logs.azure.com/enabled: "true"
+    
+    # Security and compliance labels
+    security.azure.com/defender-enabled: "true"
+    compliance.azure.com/data-residency: "required"
+    
+  annotations:
+    # Azure integration annotations
+    azure.workload.identity/client-id: ""  # Set during deployment
+    azure.workload.identity/tenant-id: ""  # Set during deployment
+    
+    # Azure Monitor integration
+    monitor.azure.com/workspace-id: ""  # Set during deployment
+    monitor.azure.com/data-collection-rule: "rwwwrse-dcr"
+    
+    # Azure Key Vault integration
+    azure.key-vault.io/enabled: "true"
+    azure.key-vault.io/vault-name: ""  # Set during deployment
+    
+    # Description and documentation
+    kubernetes.io/description: "rwwwrse reverse proxy server deployment namespace for Azure AKS"
+    deployment.azure.com/documentation: "https://github.com/your-org/rwwwrse/tree/main/examples/kubernetes/cloud/azure-aks"
+    
+    # Resource management
+    resources.azure.com/auto-scaling: "enabled"
+    resources.azure.com/cost-optimization: "enabled"
+    
+    # Network policies and security
+    network.azure.com/policy-enabled: "true"
+    security.azure.com/pod-security-standard: "restricted"
+    
+    # Backup and disaster recovery
+    backup.azure.com/enabled: "true"
+    backup.azure.com/schedule: "daily"
+    backup.azure.com/retention: "30d"
+    
+    # Compliance and governance
+    policy.azure.com/audit-enabled: "true"
+    governance.azure.com/resource-group: ""  # Set during deployment
+    
+    # Creation timestamp for tracking
+    created-by: "rwwwrse-deployment-script"
+    created-at: ""  # Will be set automatically
+    
+---
+# Network Policy for Azure AKS
+# Defines network security rules for the rwwwrse namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rwwwrse-network-policy
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: network-policy
+    platform: azure-aks
+  annotations:
+    azure.network.io/policy-type: "restrictive"
+    network.azure.com/description: "Network policy for rwwwrse pods in AKS"
+spec:
+  podSelector:
+    matchLabels:
+      app: rwwwrse
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  # Ingress rules - Allow traffic from load balancer and within namespace
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    - namespaceSelector:
+        matchLabels:
+          name: rwwwrse
+    - podSelector:
+        matchLabels:
+          app: rwwwrse
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 8443
+  
+  # Allow ingress from Azure Load Balancer
+  - from: []
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 8443
+  
+  # Egress rules - Allow necessary outbound traffic
+  egress:
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  
+  # Allow HTTPS for certificate management and external APIs
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+  
+  # Allow HTTP for internal services
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 80
+  
+  # Allow communication within namespace
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: rwwwrse
+  
+  # Allow communication to backend services
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: default
+    ports:
+    - protocol: TCP
+      port: 3000
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 9000
+
+---
+# Resource Quota for the rwwwrse namespace
+# Ensures proper resource allocation and prevents resource exhaustion
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: rwwwrse-resource-quota
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: resource-quota
+    platform: azure-aks
+  annotations:
+    azure.resource.io/description: "Resource quota for rwwwrse namespace"
+    azure.resource.io/monitoring: "enabled"
+spec:
+  hard:
+    # Compute resources
+    requests.cpu: "4"
+    requests.memory: 8Gi
+    limits.cpu: "8"
+    limits.memory: 16Gi
+    
+    # Storage resources
+    requests.storage: 100Gi
+    persistentvolumeclaims: "10"
+    
+    # Object counts
+    pods: "50"
+    services: "10"
+    configmaps: "20"
+    secrets: "20"
+    ingresses.networking.k8s.io: "5"
+    
+    # Load balancer services (expensive in Azure)
+    services.loadbalancer: "2"
+    
+---
+# Limit Range to set default resource limits
+# Ensures all pods have appropriate resource constraints
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: rwwwrse-limit-range
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: limit-range
+    platform: azure-aks
+  annotations:
+    azure.resource.io/description: "Default resource limits for rwwwrse pods"
+spec:
+  limits:
+  # Default limits for containers
+  - default:
+      cpu: 500m
+      memory: 512Mi
+    defaultRequest:
+      cpu: 100m
+      memory: 128Mi
+    type: Container
+  
+  # Limits for pods
+  - max:
+      cpu: "2"
+      memory: 4Gi
+    min:
+      cpu: 50m
+      memory: 64Mi
+    type: Pod
+  
+  # Limits for persistent volume claims
+  - max:
+      storage: 50Gi
+    min:
+      storage: 1Gi
+    type: PersistentVolumeClaim

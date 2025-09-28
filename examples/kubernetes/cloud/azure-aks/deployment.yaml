@@ -1,0 +1,630 @@
+# Azure AKS Deployment Configuration for rwwwrse
+# This file deploys rwwwrse on Azure Kubernetes Service with Azure-specific integrations
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rwwwrse
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: reverse-proxy
+    version: v1.0.0
+    platform: azure-aks
+    app.kubernetes.io/name: rwwwrse
+    app.kubernetes.io/instance: rwwwrse-production
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/component: reverse-proxy
+    app.kubernetes.io/part-of: rwwwrse-platform
+    app.kubernetes.io/managed-by: kubectl
+  annotations:
+    # Azure-specific annotations
+    azure.workload.identity/use: "true"
+    azure.workload.identity/service-account-token-expiration: "3600"
+    
+    # Deployment configuration
+    deployment.kubernetes.io/revision: "1"
+    kubernetes.io/description: "rwwwrse reverse proxy deployment for Azure AKS"
+    
+    # Azure Monitor integration
+    monitor.azure.com/scrape: "true"
+    monitor.azure.com/path: "/metrics"
+    monitor.azure.com/port: "8080"
+    monitor.azure.com/interval: "30s"
+    
+    # Azure Cost Management
+    azure.cost.io/resource-group: ""  # Set during deployment
+    azure.cost.io/subscription: ""    # Set during deployment
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: rwwwrse
+      component: reverse-proxy
+  template:
+    metadata:
+      labels:
+        app: rwwwrse
+        component: reverse-proxy
+        version: v1.0.0
+        platform: azure-aks
+        # Azure Workload Identity labels
+        azure.workload.identity/use: "true"
+      annotations:
+        # Azure Monitor annotations
+        monitor.azure.com/scrape: "true"
+        monitor.azure.com/path: "/metrics"
+        monitor.azure.com/port: "8080"
+        
+        # Azure networking annotations
+        azure.network.io/pod-security-policy: "restricted"
+        
+        # Prometheus scraping (for custom monitoring)
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "8080"
+        
+        # Configuration checksum for rolling updates
+        checksum/config: ""  # Will be calculated during deployment
+    spec:
+      # Azure Workload Identity service account
+      serviceAccountName: rwwwrse-sa
+      automountServiceAccountToken: true
+      
+      # Security context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+        supplementalGroups: [65534]
+      
+      # Node selection and affinity
+      nodeSelector:
+        kubernetes.io/os: linux
+        azure.workload.identity/use: "true"
+      
+      affinity:
+        # Prefer different nodes for high availability
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values: [rwwwrse]
+              topologyKey: kubernetes.io/hostname
+          - weight: 50
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values: [rwwwrse]
+              topologyKey: topology.kubernetes.io/zone
+        
+        # Prefer Azure spot instances if available (cost optimization)
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 50
+            preference:
+              matchExpressions:
+              - key: kubernetes.azure.com/scalesetpriority
+                operator: In
+                values: ["spot"]
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: node.kubernetes.io/instance-type
+                operator: In
+                values: ["Standard_D2s_v3", "Standard_D4s_v3"]
+      
+      # Tolerations for spot instances
+      tolerations:
+      - key: kubernetes.azure.com/scalesetpriority
+        operator: Equal
+        value: spot
+        effect: NoSchedule
+      
+      # Init containers for setup tasks
+      initContainers:
+      - name: cert-dir-setup
+        image: busybox:1.35
+        command: ['sh', '-c', 'mkdir -p /tmp/certs && chmod 755 /tmp/certs']
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65534
+          runAsGroup: 65534
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+        - name: cert-storage
+          mountPath: /tmp/certs
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 50m
+            memory: 32Mi
+      
+      containers:
+      - name: rwwwrse
+        # Azure Container Registry image reference
+        image: "your-acr.azurecr.io/rwwwrse:latest"
+        imagePullPolicy: Always
+        
+        # Security context
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65534
+          runAsGroup: 65534
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        
+        # Container ports
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        - name: https
+          containerPort: 8443
+          protocol: TCP
+        - name: metrics
+          containerPort: 8080
+          protocol: TCP
+        
+        # Environment variables from ConfigMap and Secrets
+        envFrom:
+        - configMapRef:
+            name: rwwwrse-config
+        - secretRef:
+            name: rwwwrse-secrets
+            optional: true
+        
+        # Additional environment variables
+        env:
+        # Kubernetes API integration
+        - name: RWWWRSE_K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: RWWWRSE_K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: RWWWRSE_K8S_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: RWWWRSE_K8S_POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        
+        # Azure-specific environment variables
+        - name: AZURE_CLIENT_ID
+          valueFrom:
+            secretRef:
+              name: azure-workload-identity
+              key: azure-client-id
+              optional: true
+        - name: AZURE_TENANT_ID
+          valueFrom:
+            secretRef:
+              name: azure-workload-identity
+              key: azure-tenant-id
+              optional: true
+        - name: AZURE_FEDERATED_TOKEN_FILE
+          value: "/var/run/secrets/azure/tokens/azure-identity-token"
+        
+        # Resource requests and limits
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+            ephemeral-storage: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+            ephemeral-storage: 2Gi
+        
+        # Volume mounts
+        volumeMounts:
+        # Certificate storage
+        - name: cert-storage
+          mountPath: /tmp/certs
+        
+        # Azure Workload Identity token
+        - name: azure-identity-token
+          mountPath: /var/run/secrets/azure/tokens
+          readOnly: true
+        
+        # Azure Key Vault secrets (if using CSI driver)
+        - name: azure-keyvault-secrets
+          mountPath: /mnt/secrets-store
+          readOnly: true
+        
+        # Content and configuration
+        - name: sample-content
+          mountPath: /app/static
+          readOnly: true
+        
+        # Health checks
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 30
+      
+      # Sidecar container for Azure Monitor integration
+      - name: azure-monitor-agent
+        image: mcr.microsoft.com/azuremonitor/containerinsights/ciprod:ciprod04142021
+        imagePullPolicy: IfNotPresent
+        
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65534
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        
+        env:
+        - name: CONTROLLER_TYPE
+          value: "DaemonSet"
+        - name: NODE_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 150m
+            memory: 256Mi
+        
+        volumeMounts:
+        - name: azure-monitor-config
+          mountPath: /etc/omsagent-secret
+          readOnly: true
+      
+      # Volumes
+      volumes:
+      # Certificate storage (emptyDir with memory backing for performance)
+      - name: cert-storage
+        emptyDir:
+          medium: Memory
+          sizeLimit: 100Mi
+      
+      # Azure Workload Identity token volume
+      - name: azure-identity-token
+        projected:
+          defaultMode: 420
+          sources:
+          - serviceAccountToken:
+              audience: api://AzureADTokenExchange
+              expirationSeconds: 3600
+              path: azure-identity-token
+      
+      # Azure Key Vault secrets via CSI driver
+      - name: azure-keyvault-secrets
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: "rwwwrse-secrets"
+      
+      # Sample content
+      - name: sample-content
+        configMap:
+          name: sample-content
+          defaultMode: 420
+      
+      # Azure Monitor configuration
+      - name: azure-monitor-config
+        secret:
+          secretName: azure-monitor-config
+          optional: true
+      
+      # DNS configuration for better performance
+      dnsPolicy: ClusterFirst
+      dnsConfig:
+        options:
+        - name: ndots
+          value: "2"
+        - name: edns0
+      
+      # Termination grace period
+      terminationGracePeriodSeconds: 30
+      
+      # Image pull secrets for Azure Container Registry
+      imagePullSecrets:
+      - name: acr-credentials
+
+---
+# Service Account for Azure Workload Identity
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rwwwrse-sa
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: service-account
+    platform: azure-aks
+  annotations:
+    # Azure Workload Identity annotations
+    azure.workload.identity/client-id: ""  # Set during deployment
+    azure.workload.identity/tenant-id: ""  # Set during deployment
+    azure.workload.identity/service-account-token-expiration: "3600"
+automountServiceAccountToken: true
+
+---
+# Service for rwwwrse
+apiVersion: v1
+kind: Service
+metadata:
+  name: rwwwrse
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: service
+    platform: azure-aks
+  annotations:
+    # Azure Load Balancer annotations
+    service.beta.kubernetes.io/azure-load-balancer-mode: "cluster"
+    service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path: "/health"
+    service.beta.kubernetes.io/azure-load-balancer-health-probe-protocol: "http"
+    service.beta.kubernetes.io/azure-load-balancer-health-probe-interval: "10"
+    service.beta.kubernetes.io/azure-load-balancer-health-probe-num-of-probe: "3"
+    
+    # SSL certificates (if using Azure Application Gateway)
+    service.beta.kubernetes.io/azure-load-balancer-ssl-cert: ""  # Set if using SSL
+    
+    # Load balancer IP (if using static IP)
+    service.beta.kubernetes.io/azure-load-balancer-resource-group: ""  # Set during deployment
+    
+    # Azure DNS integration
+    external-dns.alpha.kubernetes.io/hostname: "rwwwrse.your-domain.com"
+    external-dns.alpha.kubernetes.io/ttl: "300"
+spec:
+  type: LoadBalancer
+  sessionAffinity: None
+  externalTrafficPolicy: Local  # Preserve source IP
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+    protocol: TCP
+  - name: https
+    port: 443
+    targetPort: https
+    protocol: TCP
+  selector:
+    app: rwwwrse
+    component: reverse-proxy
+  loadBalancerSourceRanges: []  # Restrict access if needed
+
+---
+# Internal Service for inter-cluster communication
+apiVersion: v1
+kind: Service
+metadata:
+  name: rwwwrse-internal
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: internal-service
+    platform: azure-aks
+  annotations:
+    service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+    service.beta.kubernetes.io/azure-load-balancer-internal-subnet: ""  # Set if using specific subnet
+spec:
+  type: LoadBalancer
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+    protocol: TCP
+  - name: metrics
+    port: 8080
+    targetPort: metrics
+    protocol: TCP
+  selector:
+    app: rwwwrse
+    component: reverse-proxy
+
+---
+# Horizontal Pod Autoscaler
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: rwwwrse-hpa
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: autoscaler
+    platform: azure-aks
+  annotations:
+    azure.autoscaling.io/enabled: "true"
+    azure.autoscaling.io/cpu-target: "70"
+    azure.autoscaling.io/memory-target: "80"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: rwwwrse
+  minReplicas: 3
+  maxReplicas: 100
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+      selectPolicy: Min
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 60
+      - type: Pods
+        value: 4
+        periodSeconds: 60
+      selectPolicy: Max
+
+---
+# Pod Disruption Budget
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rwwwrse-pdb
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: disruption-budget
+    platform: azure-aks
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: rwwwrse
+      component: reverse-proxy
+
+---
+# Service Monitor for Prometheus (if using Azure Monitor for containers with Prometheus)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: rwwwrse-metrics
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: monitoring
+    platform: azure-aks
+  annotations:
+    azure.monitor.io/enabled: "true"
+spec:
+  selector:
+    matchLabels:
+      app: rwwwrse
+      component: service
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s
+    honorLabels: true
+    relabelings:
+    - sourceLabels: [__meta_kubernetes_pod_name]
+      targetLabel: pod
+    - sourceLabels: [__meta_kubernetes_namespace]
+      targetLabel: namespace
+    - sourceLabels: [__meta_kubernetes_service_name]
+      targetLabel: service
+
+---
+# Azure Key Vault SecretProviderClass (if using Azure Key Vault CSI driver)
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: rwwwrse-secrets
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: secrets
+    platform: azure-aks
+spec:
+  provider: azure
+  parameters:
+    usePodIdentity: "false"
+    useVMManagedIdentity: "false"
+    userAssignedIdentityID: ""  # Set during deployment
+    keyvaultName: ""            # Set during deployment
+    cloudName: "AzurePublicCloud"
+    objects: |
+      array:
+        - |
+          objectName: rwwwrse-tls-email
+          objectType: secret
+          objectVersion: ""
+        - |
+          objectName: rwwwrse-jwt-secret
+          objectType: secret
+          objectVersion: ""
+        - |
+          objectName: rwwwrse-api-keys
+          objectType: secret
+          objectVersion: ""
+    tenantId: ""  # Set during deployment
+  secretObjects:
+  - secretName: rwwwrse-keyvault-secrets
+    type: Opaque
+    data:
+    - objectName: rwwwrse-tls-email
+      key: tls-email
+    - objectName: rwwwrse-jwt-secret
+      key: jwt-secret
+    - objectName: rwwwrse-api-keys
+      key: api-keys

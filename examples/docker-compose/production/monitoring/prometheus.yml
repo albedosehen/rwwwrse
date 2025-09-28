@@ -1,0 +1,148 @@
+# Prometheus Configuration for rwwwrse Production Monitoring
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'rwwwrse-production'
+    environment: 'production'
+
+rule_files:
+  - "alerts.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+scrape_configs:
+  # rwwwrse reverse proxy metrics
+  - job_name: 'rwwwrse'
+    static_configs:
+      - targets: ['rwwwrse:9090']
+    scrape_interval: 15s
+    metrics_path: /metrics
+    labels:
+      service: 'rwwwrse'
+      tier: 'proxy'
+
+  # Application servers
+  - job_name: 'app-primary'
+    static_configs:
+      - targets: ['app-primary:9090']
+    scrape_interval: 30s
+    labels:
+      service: 'app'
+      tier: 'application'
+
+  # API servers
+  - job_name: 'api-server'
+    static_configs:
+      - targets: ['api-server:9090']
+    scrape_interval: 15s
+    labels:
+      service: 'api'
+      tier: 'application'
+
+  # Admin panel
+  - job_name: 'admin-panel'
+    static_configs:
+      - targets: ['admin-panel:9090']
+    scrape_interval: 30s
+    labels:
+      service: 'admin'
+      tier: 'application'
+
+  # PostgreSQL metrics
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+    scrape_interval: 30s
+    labels:
+      service: 'postgres'
+      tier: 'database'
+
+  # Redis metrics
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+    scrape_interval: 30s
+    labels:
+      service: 'redis'
+      tier: 'cache'
+
+  # Node/System metrics
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 30s
+    labels:
+      service: 'node'
+      tier: 'infrastructure'
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 30s
+    labels:
+      service: 'prometheus'
+      tier: 'monitoring'
+
+  # Alertmanager monitoring
+  - job_name: 'alertmanager'
+    static_configs:
+      - targets: ['alertmanager:9093']
+    scrape_interval: 30s
+    labels:
+      service: 'alertmanager'
+      tier: 'monitoring'
+
+  # Grafana monitoring
+  - job_name: 'grafana'
+    static_configs:
+      - targets: ['grafana:3000']
+    scrape_interval: 60s
+    metrics_path: /metrics
+    labels:
+      service: 'grafana'
+      tier: 'monitoring'
+
+  # Fluentd monitoring
+  - job_name: 'fluentd'
+    static_configs:
+      - targets: ['fluentd:24220']
+    scrape_interval: 60s
+    metrics_path: /api/plugins.json
+    labels:
+      service: 'fluentd'
+      tier: 'logging'
+
+  # Container runtime metrics (if available)
+  - job_name: 'docker'
+    static_configs:
+      - targets: ['host.docker.internal:9323']
+    scrape_interval: 30s
+    labels:
+      service: 'docker'
+      tier: 'infrastructure'
+
+# Storage configuration
+storage:
+  tsdb:
+    retention.time: 30d
+    retention.size: 10GB
+    path: /prometheus
+    wal-compression: true
+
+# Remote write configuration (optional - for long-term storage)
+# remote_write:
+#   - url: "https://your-remote-storage/api/v1/write"
+#     basic_auth:
+#       username: "your-username"
+#       password: "your-password"
+
+# Recording rules for common queries
+# rule_files:
+#   - "recording_rules.yml"

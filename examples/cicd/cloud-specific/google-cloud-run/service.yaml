@@ -1,0 +1,322 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: rwwwrse
+  annotations:
+    # Cloud Run service annotations
+    run.googleapis.com/ingress: all
+    run.googleapis.com/ingress-status: all
+    run.googleapis.com/description: "rwwwrse reverse proxy service"
+    run.googleapis.com/cpu-throttling: "false"
+    run.googleapis.com/execution-environment: gen2
+    run.googleapis.com/launch-stage: BETA
+    # Binary authorization
+    run.googleapis.com/binary-authorization-breakglass: "false"
+    # VPC connector (uncomment if needed)
+    # run.googleapis.com/vpc-access-connector: projects/PROJECT_ID/locations/REGION/connectors/rwwwrse-connector
+    # run.googleapis.com/vpc-access-egress: private-ranges-only
+  labels:
+    app: rwwwrse
+    version: v1
+    environment: production
+spec:
+  template:
+    metadata:
+      annotations:
+        # Scaling configuration
+        autoscaling.knative.dev/maxScale: "100"
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/target: "80"
+        autoscaling.knative.dev/targetUtilizationPercentage: "70"
+        # Resource allocation
+        run.googleapis.com/cpu-throttling: "false"
+        run.googleapis.com/execution-environment: gen2
+        run.googleapis.com/memory: "512Mi"
+        run.googleapis.com/cpu: "1000m"
+        # Networking
+        run.googleapis.com/network-interfaces: '[{"network":"default","subnetwork":"default"}]'
+        # Security
+        run.googleapis.com/sandbox: gvisor
+        # Monitoring
+        run.googleapis.com/enable-audit-logs: "true"
+      labels:
+        app: rwwwrse
+        version: v1
+        environment: production
+    spec:
+      # Container concurrency - maximum concurrent requests per instance
+      containerConcurrency: 100
+      # Request timeout in seconds
+      timeoutSeconds: 300
+      # Service account for Cloud Run service
+      serviceAccountName: rwwwrse-sa@PROJECT_ID.iam.gserviceaccount.com
+      containers:
+      - name: rwwwrse
+        # Container image - replace PROJECT_ID with your actual project ID
+        image: gcr.io/PROJECT_ID/rwwwrse:latest
+        ports:
+        - name: http1
+          containerPort: 8080
+          protocol: TCP
+        # Environment variables
+        env:
+        - name: RWWWRSE_PORT
+          value: "8080"
+        - name: RWWWRSE_HOST
+          value: "0.0.0.0"
+        - name: RWWWRSE_LOG_LEVEL
+          value: "info"
+        - name: RWWWRSE_LOG_FORMAT
+          value: "json"
+        - name: RWWWRSE_HEALTH_PATH
+          value: "/health"
+        - name: RWWWRSE_METRICS_PATH
+          value: "/metrics"
+        - name: RWWWRSE_ENABLE_TLS
+          value: "false"
+        # Route configuration
+        - name: RWWWRSE_ROUTES_API_TARGET
+          value: "https://api-backend-service.com"
+        - name: RWWWRSE_ROUTES_API_HOST
+          value: "api.example.com"
+        - name: RWWWRSE_ROUTES_APP_TARGET
+          value: "https://app-backend-service.com"
+        - name: RWWWRSE_ROUTES_APP_HOST
+          value: "app.example.com"
+        - name: RWWWRSE_ROUTES_WEB_TARGET
+          value: "https://web-backend-service.com"
+        - name: RWWWRSE_ROUTES_WEB_HOST
+          value: "web.example.com"
+        - name: RWWWRSE_ROUTES_ADMIN_TARGET
+          value: "https://admin-backend-service.com"
+        - name: RWWWRSE_ROUTES_ADMIN_HOST
+          value: "admin.example.com"
+        # Performance tuning
+        - name: RWWWRSE_READ_TIMEOUT
+          value: "30s"
+        - name: RWWWRSE_WRITE_TIMEOUT
+          value: "30s"
+        - name: RWWWRSE_IDLE_TIMEOUT
+          value: "120s"
+        - name: RWWWRSE_MAX_HEADER_BYTES
+          value: "1048576"
+        # Security configuration
+        - name: RWWWRSE_CORS_ORIGINS
+          value: "https://example.com,https://app.example.com"
+        - name: RWWWRSE_RATE_LIMIT_ENABLED
+          value: "true"
+        - name: RWWWRSE_RATE_LIMIT_RPS
+          value: "100"
+        - name: RWWWRSE_SECURITY_HEADERS_ENABLED
+          value: "true"
+        # Secrets from Google Secret Manager
+        - name: API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: rwwwrse-api-key
+              key: latest
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: rwwwrse-database-url
+              key: latest
+        # Resource requirements
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        # Startup probe - checks if application has started
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            httpHeaders:
+            - name: User-Agent
+              value: GoogleHC/1.0
+          initialDelaySeconds: 10
+          timeoutSeconds: 5
+          periodSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+        # Liveness probe - checks if application is still running
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            httpHeaders:
+            - name: User-Agent
+              value: GoogleHC/1.0
+          initialDelaySeconds: 30
+          timeoutSeconds: 5
+          periodSeconds: 30
+          successThreshold: 1
+          failureThreshold: 3
+        # Security context
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65532
+          runAsGroup: 65532
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+  # Traffic configuration
+  traffic:
+  - percent: 100
+    latestRevision: true
+    # Optional: tag for this revision
+    tag: latest
+---
+# IAM Policy for the service (optional, can be applied separately)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rwwwrse-iam-policy
+data:
+  policy.yaml: |
+    bindings:
+    - members:
+      - allUsers
+      role: roles/run.invoker
+    etag: BwWWja0YfJA=
+    version: 1
+---
+# Monitoring configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rwwwrse-monitoring
+data:
+  dashboard.json: |
+    {
+      "displayName": "rwwwrse Cloud Run Dashboard",
+      "mosaicLayout": {
+        "tiles": [
+          {
+            "width": 6,
+            "height": 4,
+            "widget": {
+              "title": "Request Count",
+              "xyChart": {
+                "dataSets": [
+                  {
+                    "timeSeriesQuery": {
+                      "timeSeriesFilter": {
+                        "filter": "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"rwwwrse\"",
+                        "aggregation": {
+                          "alignmentPeriod": "60s",
+                          "perSeriesAligner": "ALIGN_RATE",
+                          "crossSeriesReducer": "REDUCE_SUM"
+                        }
+                      }
+                    },
+                    "plotType": "LINE"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "width": 6,
+            "height": 4,
+            "xPos": 6,
+            "widget": {
+              "title": "Request Latency",
+              "xyChart": {
+                "dataSets": [
+                  {
+                    "timeSeriesQuery": {
+                      "timeSeriesFilter": {
+                        "filter": "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"rwwwrse\"",
+                        "aggregation": {
+                          "alignmentPeriod": "60s",
+                          "perSeriesAligner": "ALIGN_DELTA",
+                          "crossSeriesReducer": "REDUCE_PERCENTILE_95"
+                        }
+                      }
+                    },
+                    "plotType": "LINE"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "width": 6,
+            "height": 4,
+            "yPos": 4,
+            "widget": {
+              "title": "Instance Count",
+              "xyChart": {
+                "dataSets": [
+                  {
+                    "timeSeriesQuery": {
+                      "timeSeriesFilter": {
+                        "filter": "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"rwwwrse\"",
+                        "aggregation": {
+                          "alignmentPeriod": "60s",
+                          "perSeriesAligner": "ALIGN_MEAN",
+                          "crossSeriesReducer": "REDUCE_SUM"
+                        }
+                      }
+                    },
+                    "plotType": "STACKED_AREA"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "width": 6,
+            "height": 4,
+            "xPos": 6,
+            "yPos": 4,
+            "widget": {
+              "title": "Error Rate",
+              "xyChart": {
+                "dataSets": [
+                  {
+                    "timeSeriesQuery": {
+                      "timeSeriesFilter": {
+                        "filter": "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"rwwwrse\" AND metric.labels.response_code_class!=\"2xx\"",
+                        "aggregation": {
+                          "alignmentPeriod": "60s",
+                          "perSeriesAligner": "ALIGN_RATE",
+                          "crossSeriesReducer": "REDUCE_SUM"
+                        }
+                      }
+                    },
+                    "plotType": "LINE"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    }
+  alert-policy.yaml: |
+    displayName: "rwwwrse High Error Rate"
+    documentation:
+      content: "Alert when rwwwrse error rate exceeds 5%"
+    conditions:
+    - displayName: "High Error Rate"
+      conditionThreshold:
+        filter: 'resource.type="cloud_run_revision" AND resource.labels.service_name="rwwwrse"'
+        comparison: COMPARISON_GREATER_THAN
+        thresholdValue: 0.05
+        duration: 300s
+        aggregations:
+        - alignmentPeriod: 60s
+          perSeriesAligner: ALIGN_RATE
+          crossSeriesReducer: REDUCE_MEAN
+          groupByFields:
+          - resource.labels.service_name
+    notificationChannels:
+    - projects/PROJECT_ID/notificationChannels/NOTIFICATION_CHANNEL_ID
+    alertStrategy:
+      autoClose: 1800s

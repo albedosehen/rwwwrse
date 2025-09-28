@@ -1,0 +1,612 @@
+# rwwwrse Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rwwwrse
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: proxy
+    version: latest
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: rwwwrse
+  template:
+    metadata:
+      labels:
+        app: rwwwrse
+        component: proxy
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: rwwwrse
+        image: rwwwrse:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 9090
+          name: metrics
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: rwwwrse-config
+        env:
+        - name: RWWWRSE_CONFIG_FILE
+          value: "/etc/rwwwrse/routes.yaml"
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/rwwwrse
+          readOnly: true
+        - name: tls-volume
+          mountPath: /etc/tls
+          readOnly: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 2
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: config-volume
+        configMap:
+          name: rwwwrse-config
+          items:
+          - key: routes.yaml
+            path: routes.yaml
+      - name: tls-volume
+        secret:
+          secretName: rwwwrse-tls
+          optional: true
+      securityContext:
+        fsGroup: 1000
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+
+---
+# rwwwrse Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: rwwwrse
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: proxy
+spec:
+  type: NodePort
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+    name: http
+    nodePort: 30080
+  - port: 9090
+    targetPort: 9090
+    protocol: TCP
+    name: metrics
+    nodePort: 30090
+  selector:
+    app: rwwwrse
+
+---
+# Sample App 1 Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-app1
+  namespace: rwwwrse
+  labels:
+    app: sample-app1
+    component: backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sample-app1
+  template:
+    metadata:
+      labels:
+        app: sample-app1
+        component: backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: app
+        image: nginx:alpine
+        ports:
+        - containerPort: 8080
+          name: http
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+          readOnly: true
+        - name: content-volume
+          mountPath: /usr/share/nginx/html
+          readOnly: true
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 10
+      volumes:
+      - name: config-volume
+        configMap:
+          name: nginx-config
+      - name: content-volume
+        configMap:
+          name: sample-app1-content
+
+---
+# Sample App 1 Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: sample-app1
+  namespace: rwwwrse
+  labels:
+    app: sample-app1
+spec:
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: sample-app1
+
+---
+# Sample App 2 Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-app2
+  namespace: rwwwrse
+  labels:
+    app: sample-app2
+    component: backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sample-app2
+  template:
+    metadata:
+      labels:
+        app: sample-app2
+        component: backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: app
+        image: nginx:alpine
+        ports:
+        - containerPort: 8080
+          name: http
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+          readOnly: true
+        - name: content-volume
+          mountPath: /usr/share/nginx/html
+          readOnly: true
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 10
+      volumes:
+      - name: config-volume
+        configMap:
+          name: nginx-config
+      - name: content-volume
+        configMap:
+          name: sample-app2-content
+
+---
+# Sample App 2 Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: sample-app2
+  namespace: rwwwrse
+  labels:
+    app: sample-app2
+spec:
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: sample-app2
+
+---
+# Sample API Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-api
+  namespace: rwwwrse
+  labels:
+    app: sample-api
+    component: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sample-api
+  template:
+    metadata:
+      labels:
+        app: sample-api
+        component: api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: "/api/metrics"
+    spec:
+      containers:
+      - name: api
+        image: node:18-alpine
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          cat > /app/server.js << 'EOF'
+          const express = require('express');
+          const app = express();
+          const port = 3000;
+          
+          // Middleware
+          app.use(express.json());
+          app.use('/api', (req, res, next) => {
+            console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+            next();
+          });
+          
+          // Health check
+          app.get('/api/health', (req, res) => {
+            res.json({ 
+              status: 'healthy', 
+              service: 'sample-api',
+              timestamp: new Date().toISOString(),
+              uptime: process.uptime()
+            });
+          });
+          
+          // Metrics endpoint
+          app.get('/api/metrics', (req, res) => {
+            res.set('Content-Type', 'text/plain');
+            res.send(`
+          # HELP nodejs_version_info Node.js version info
+          # TYPE nodejs_version_info gauge
+          nodejs_version_info{version="${process.version}"} 1
+          
+          # HELP process_uptime_seconds Number of seconds the process has been running
+          # TYPE process_uptime_seconds gauge
+          process_uptime_seconds ${process.uptime()}
+          
+          # HELP api_requests_total Total number of API requests
+          # TYPE api_requests_total counter
+          api_requests_total 42
+            `);
+          });
+          
+          // Sample API endpoints
+          app.get('/api/users', (req, res) => {
+            res.json([
+              { id: 1, name: 'John Doe', email: 'john@example.com' },
+              { id: 2, name: 'Jane Smith', email: 'jane@example.com' }
+            ]);
+          });
+          
+          app.get('/api/users/:id', (req, res) => {
+            const id = parseInt(req.params.id);
+            if (id === 1) {
+              res.json({ id: 1, name: 'John Doe', email: 'john@example.com' });
+            } else if (id === 2) {
+              res.json({ id: 2, name: 'Jane Smith', email: 'jane@example.com' });
+            } else {
+              res.status(404).json({ error: 'User not found' });
+            }
+          });
+          
+          app.post('/api/users', (req, res) => {
+            res.status(201).json({ 
+              id: 3, 
+              ...req.body,
+              created_at: new Date().toISOString()
+            });
+          });
+          
+          // Start server
+          app.listen(port, '0.0.0.0', () => {
+            console.log(`Sample API listening on port ${port}`);
+          });
+          EOF
+          
+          cd /app && npm init -y && npm install express
+          node server.js
+        ports:
+        - containerPort: 3000
+          name: http
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        workingDir: /app
+
+---
+# Sample API Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: sample-api
+  namespace: rwwwrse
+  labels:
+    app: sample-api
+spec:
+  ports:
+  - port: 3000
+    targetPort: 3000
+    protocol: TCP
+    name: http
+  selector:
+    app: sample-api
+
+---
+# Sample Static Content Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-static
+  namespace: rwwwrse
+  labels:
+    app: sample-static
+    component: static
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sample-static
+  template:
+    metadata:
+      labels:
+        app: sample-static
+        component: static
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+          name: http
+        volumeMounts:
+        - name: nginx-config
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+          readOnly: true
+        - name: content-volume
+          mountPath: /usr/share/nginx/html
+          readOnly: true
+        resources:
+          requests:
+            cpu: 25m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 80
+          initialDelaySeconds: 3
+          periodSeconds: 10
+      volumes:
+      - name: nginx-config
+        configMap:
+          name: nginx-config
+      - name: content-volume
+        configMap:
+          name: nginx-config
+          items:
+          - key: index.html
+            path: index.html
+
+---
+# Sample Static Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: sample-static
+  namespace: rwwwrse
+  labels:
+    app: sample-static
+spec:
+  ports:
+  - port: 80
+    targetPort: 80
+    protocol: TCP
+    name: http
+  selector:
+    app: sample-static
+
+---
+# Prometheus Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: rwwwrse
+  labels:
+    app: prometheus
+    component: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+        component: monitoring
+    spec:
+      containers:
+      - name: prometheus
+        image: prom/prometheus:latest
+        args:
+        - --config.file=/etc/prometheus/prometheus.yml
+        - --storage.tsdb.path=/prometheus/data
+        - --web.console.libraries=/etc/prometheus/console_libraries
+        - --web.console.templates=/etc/prometheus/consoles
+        - --web.enable-lifecycle
+        - --storage.tsdb.retention.time=7d
+        ports:
+        - containerPort: 9090
+          name: web
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/prometheus
+          readOnly: true
+        - name: storage-volume
+          mountPath: /prometheus/data
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+        livenessProbe:
+          httpGet:
+            path: /-/healthy
+            port: 9090
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /-/ready
+            port: 9090
+          initialDelaySeconds: 10
+          periodSeconds: 10
+      volumes:
+      - name: config-volume
+        configMap:
+          name: prometheus-config
+      - name: storage-volume
+        emptyDir: {}
+
+---
+# Prometheus Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: rwwwrse
+  labels:
+    app: prometheus
+spec:
+  type: NodePort
+  ports:
+  - port: 9090
+    targetPort: 9090
+    protocol: TCP
+    name: web
+    nodePort: 30091
+  selector:
+    app: prometheus

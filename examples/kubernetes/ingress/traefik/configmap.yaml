@@ -1,0 +1,664 @@
+# Traefik Configuration for rwwwrse
+# This file configures rwwwrse for deployment with Traefik using CRDs and dynamic configuration
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rwwwrse-traefik-config
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: config
+    version: v1.0.0
+    environment: traefik-ingress
+    managed-by: kubectl
+  annotations:
+    kubernetes.io/description: "rwwwrse configuration for Traefik deployment"
+    config.kubernetes.io/local-config: "true"
+    traefik.ingress.kubernetes.io/router.middlewares: "default-secure-headers@kubernetescrd"
+data:
+  # Server Configuration
+  RWWWRSE_PORT: "8080"
+  RWWWRSE_HOST: "0.0.0.0"
+  RWWWRSE_READ_TIMEOUT: "30s"
+  RWWWRSE_WRITE_TIMEOUT: "30s"
+  RWWWRSE_IDLE_TIMEOUT: "120s"
+  RWWWRSE_MAX_HEADER_BYTES: "1048576"
+  RWWWRSE_GRACEFUL_TIMEOUT: "30s"
+
+  # TLS Configuration (handled by Traefik)
+  RWWWRSE_TLS_ENABLED: "false"  # Traefik handles TLS termination
+  RWWWRSE_TLS_AUTO_CERT: "false"  # Traefik handles certificates with Let's Encrypt
+  RWWWRSE_TLS_CERT_DIR: "/tmp/certs"
+  RWWWRSE_TLS_HOST_POLICY: "allow_all"  # Traefik handles host routing
+  RWWWRSE_TLS_HOSTS: ""  # Not needed with Traefik IngressRoutes
+  RWWWRSE_TLS_EMAIL: ""  # Set in Traefik configuration
+  
+  # Logging Configuration
+  RWWWRSE_LOG_LEVEL: "info"
+  RWWWRSE_LOG_FORMAT: "json"
+  RWWWRSE_LOG_OUTPUT: "stdout"
+  RWWWRSE_LOG_TIMESTAMP: "true"
+  RWWWRSE_LOG_CALLER: "false"
+  RWWWRSE_ACCESS_LOG_ENABLED: "true"
+  RWWWRSE_ACCESS_LOG_FORMAT: "json"
+
+  # Health Check Configuration
+  RWWWRSE_HEALTH_ENABLED: "true"
+  RWWWRSE_HEALTH_PATH: "/health"
+  RWWWRSE_HEALTH_INTERVAL: "30s"
+  RWWWRSE_HEALTH_TIMEOUT: "10s"
+  
+  # Metrics Configuration
+  RWWWRSE_METRICS_ENABLED: "true"
+  RWWWRSE_METRICS_PATH: "/metrics"
+  RWWWRSE_METRICS_NAMESPACE: "rwwwrse"
+  RWWWRSE_METRICS_SUBSYSTEM: "proxy"
+
+  # Rate Limiting Configuration (coordinated with Traefik)
+  RWWWRSE_RATE_LIMIT_ENABLED: "true"
+  RWWWRSE_RATE_LIMIT_REQUESTS: "500"  # Lower since Traefik also handles rate limiting
+  RWWWRSE_RATE_LIMIT_WINDOW: "1m"
+  RWWWRSE_RATE_LIMIT_BURST: "50"
+  
+  # CORS Configuration (handled by Traefik middleware)
+  RWWWRSE_CORS_ENABLED: "false"  # Traefik middleware handles CORS
+  RWWWRSE_CORS_ALLOWED_ORIGINS: ""
+  RWWWRSE_CORS_ALLOWED_METHODS: ""
+  RWWWRSE_CORS_ALLOWED_HEADERS: ""
+  RWWWRSE_CORS_ALLOW_CREDENTIALS: "false"
+  RWWWRSE_CORS_MAX_AGE: "0"
+
+  # Security Headers Configuration (handled by Traefik)
+  RWWWRSE_SECURITY_HEADERS_ENABLED: "false"  # Traefik middleware handles security headers
+  RWWWRSE_HSTS_ENABLED: "false"
+  RWWWRSE_HSTS_MAX_AGE: "0"
+  RWWWRSE_HSTS_INCLUDE_SUBDOMAINS: "false"
+  RWWWRSE_HSTS_PRELOAD: "false"
+  RWWWRSE_CONTENT_TYPE_NOSNIFF: "false"
+  RWWWRSE_FRAME_OPTIONS: ""
+  RWWWRSE_XSS_PROTECTION: ""
+  RWWWRSE_REFERRER_POLICY: ""
+
+  # Compression Configuration (handled by Traefik middleware)
+  RWWWRSE_COMPRESSION_ENABLED: "false"  # Traefik middleware handles compression
+  RWWWRSE_COMPRESSION_LEVEL: "0"
+  RWWWRSE_COMPRESSION_MIN_SIZE: "0"
+  RWWWRSE_COMPRESSION_TYPES: ""
+
+  # Circuit Breaker Configuration
+  RWWWRSE_CIRCUIT_BREAKER_ENABLED: "true"
+  RWWWRSE_CIRCUIT_BREAKER_THRESHOLD: "10"
+  RWWWRSE_CIRCUIT_BREAKER_TIMEOUT: "60s"
+  RWWWRSE_CIRCUIT_BREAKER_MAX_REQUESTS: "5"
+
+  # Load Balancing Configuration
+  RWWWRSE_LB_STRATEGY: "round_robin"
+  RWWWRSE_LB_HEALTH_CHECK_ENABLED: "true"
+  RWWWRSE_LB_HEALTH_CHECK_INTERVAL: "30s"
+  RWWWRSE_LB_HEALTH_CHECK_TIMEOUT: "10s"
+  RWWWRSE_LB_HEALTH_CHECK_PATH: "/health"
+
+  # Retry Configuration
+  RWWWRSE_RETRY_ENABLED: "true"
+  RWWWRSE_RETRY_MAX_ATTEMPTS: "3"
+  RWWWRSE_RETRY_INITIAL_INTERVAL: "1s"
+  RWWWRSE_RETRY_MAX_INTERVAL: "10s"
+  RWWWRSE_RETRY_MULTIPLIER: "2"
+
+  # Request ID Configuration
+  RWWWRSE_REQUEST_ID_ENABLED: "true"
+  RWWWRSE_REQUEST_ID_HEADER: "X-Request-ID"
+  RWWWRSE_REQUEST_ID_GENERATOR: "uuid"
+
+  # Traefik specific configuration
+  RWWWRSE_INGRESS_CONTROLLER: "traefik"
+  RWWWRSE_BEHIND_PROXY: "true"
+  RWWWRSE_TRUST_PROXY: "true"
+  RWWWRSE_PROXY_PROTOCOL: "false"  # Traefik handles proxy protocol
+  RWWWRSE_FORWARDED_HEADERS: "true"
+
+  # Kubernetes-Specific Configuration
+  RWWWRSE_K8S_NAMESPACE: "rwwwrse"
+  RWWWRSE_K8S_SERVICE_NAME: "rwwwrse"
+  RWWWRSE_K8S_POD_NAME: ""  # Injected by downward API
+  RWWWRSE_K8S_NODE_NAME: ""  # Injected by downward API
+
+  # Target Configuration
+  RWWWRSE_TARGETS: |
+    {
+      "api.example.com": {
+        "backends": [
+          "http://api-service.default.svc.cluster.local:3000"
+        ],
+        "health_check": {
+          "enabled": true,
+          "path": "/health",
+          "interval": "30s",
+          "timeout": "10s"
+        },
+        "retry": {
+          "enabled": true,
+          "max_attempts": 3,
+          "initial_interval": "1s"
+        },
+        "circuit_breaker": {
+          "enabled": true,
+          "threshold": 10,
+          "timeout": "60s"
+        },
+        "rate_limit": {
+          "enabled": true,
+          "requests": 200,
+          "window": "1m"
+        },
+        "traefik": {
+          "middlewares": ["security-headers", "rate-limit", "compression", "circuit-breaker"],
+          "tls_options": "modern-tls",
+          "priority": 1000
+        }
+      },
+      "app.example.com": {
+        "backends": [
+          "http://frontend-service.default.svc.cluster.local:80"
+        ],
+        "health_check": {
+          "enabled": true,
+          "path": "/",
+          "interval": "30s",
+          "timeout": "10s"
+        },
+        "static": {
+          "enabled": true,
+          "cache_control": "public, max-age=3600"
+        },
+        "traefik": {
+          "middlewares": ["security-headers", "cors", "compression"],
+          "tls_options": "modern-tls",
+          "priority": 900
+        }
+      },
+      "web.example.com": {
+        "backends": [
+          "http://web-service.default.svc.cluster.local:8080"
+        ],
+        "health_check": {
+          "enabled": true,
+          "path": "/health",
+          "interval": "30s",
+          "timeout": "10s"
+        },
+        "middleware": {
+          "compression": false,
+          "security_headers": false,
+          "cors": false
+        },
+        "traefik": {
+          "middlewares": ["security-headers", "compression", "circuit-breaker"],
+          "tls_options": "modern-tls",
+          "priority": 800
+        }
+      },
+      "admin.example.com": {
+        "backends": [
+          "http://admin-service.default.svc.cluster.local:9000"
+        ],
+        "health_check": {
+          "enabled": true,
+          "path": "/admin/health",
+          "interval": "30s",
+          "timeout": "10s"
+        },
+        "auth": {
+          "enabled": true,
+          "type": "jwt",
+          "secret_key_env": "JWT_SECRET"
+        },
+        "rate_limit": {
+          "enabled": true,
+          "requests": 50,
+          "window": "1m"
+        },
+        "traefik": {
+          "middlewares": ["security-headers", "rate-limit", "compression"],
+          "tls_options": "modern-tls",
+          "priority": 1100
+        }
+      }
+    }
+
+  # Traefik Configuration
+  RWWWRSE_TRAEFIK_CONFIG: |
+    {
+      "global": {
+        "check_new_version": false,
+        "send_anonymous_usage": false
+      },
+      "api": {
+        "dashboard": true,
+        "insecure": false
+      },
+      "entrypoints": {
+        "web": {
+          "address": ":80",
+          "http": {
+            "redirections": {
+              "entrypoint": {
+                "to": "websecure",
+                "scheme": "https",
+                "permanent": true
+              }
+            }
+          }
+        },
+        "websecure": {
+          "address": ":443",
+          "http": {
+            "tls": {
+              "options": "modern-tls@kubernetescrd"
+            }
+          }
+        }
+      },
+      "providers": {
+        "kubernetescrd": {
+          "endpoints": ["https://kubernetes.default.svc"],
+          "ingressclass": "traefik"
+        }
+      },
+      "certificatesresolvers": {
+        "letsencrypt": {
+          "acme": {
+            "tlschallenge": {},
+            "email": "admin@example.com",
+            "storage": "/data/acme.json",
+            "caserver": "https://acme-v02.api.letsencrypt.org/directory"
+          }
+        }
+      },
+      "metrics": {
+        "prometheus": {
+          "addEntryPointsLabels": true,
+          "addServicesLabels": true,
+          "entryPoint": "metrics"
+        }
+      },
+      "tracing": {
+        "jaeger": {
+          "samplingServerURL": "http://jaeger:5778/sampling",
+          "localAgentHostPort": "jaeger:6831"
+        }
+      },
+      "accesslog": {
+        "format": "json",
+        "fields": {
+          "headers": {
+            "defaultmode": "keep",
+            "names": {
+              "User-Agent": "redact",
+              "Authorization": "drop",
+              "Content-Type": "keep"
+            }
+          }
+        }
+      },
+      "log": {
+        "level": "INFO",
+        "format": "json"
+      }
+    }
+
+---
+# Sample content for demo applications
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sample-content
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: sample-content
+    version: v1.0.0
+    ingress-controller: traefik
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>rwwwrse with Traefik</title>
+        <style>
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+            
+            body {
+                font-family: 'Arial', sans-serif;
+                line-height: 1.6;
+                color: #333;
+                background: linear-gradient(135deg, #74b9ff 0%, #0984e3 100%);
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            
+            .container {
+                background: white;
+                padding: 2rem;
+                border-radius: 10px;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+                text-align: center;
+                max-width: 600px;
+                margin: 2rem;
+            }
+            
+            .logo {
+                font-size: 3rem;
+                font-weight: bold;
+                background: linear-gradient(45deg, #74b9ff, #0984e3, #6c5ce7, #a29bfe);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                background-clip: text;
+                margin-bottom: 1rem;
+            }
+            
+            .subtitle {
+                color: #666;
+                font-size: 1.2rem;
+                margin-bottom: 2rem;
+            }
+            
+            .features {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+                gap: 1rem;
+                margin: 2rem 0;
+            }
+            
+            .feature {
+                padding: 1rem;
+                background: #f8f9fa;
+                border-radius: 8px;
+                border-left: 4px solid #74b9ff;
+            }
+            
+            .feature h3 {
+                color: #74b9ff;
+                margin-bottom: 0.5rem;
+            }
+            
+            .status {
+                margin: 2rem 0;
+                padding: 1rem;
+                background: #e8f5e8;
+                border-radius: 5px;
+                border-left: 4px solid #00b894;
+            }
+            
+            .traefik-badge {
+                display: inline-block;
+                background: #74b9ff;
+                color: white;
+                padding: 0.5rem 1rem;
+                border-radius: 20px;
+                font-size: 0.9rem;
+                margin: 1rem 0;
+            }
+            
+            .links {
+                margin-top: 2rem;
+            }
+            
+            .links a {
+                display: inline-block;
+                margin: 0.5rem;
+                padding: 0.8rem 1.5rem;
+                background: #74b9ff;
+                color: white;
+                text-decoration: none;
+                border-radius: 5px;
+                transition: background 0.3s;
+            }
+            
+            .links a:hover {
+                background: #0984e3;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="logo">rwwwrse</div>
+            <div class="subtitle">Reverse Proxy Server</div>
+            <div class="traefik-badge">🚀 Powered by Traefik</div>
+            
+            <div class="status">
+                <strong>✅ Status:</strong> Successfully deployed with Traefik and CRDs
+            </div>
+            
+            <div class="features">
+                <div class="feature">
+                    <h3>📋 CRD-Based Configuration</h3>
+                    <p>Native Kubernetes CRDs for routing and middleware</p>
+                </div>
+                <div class="feature">
+                    <h3>🔄 Dynamic Configuration</h3>
+                    <p>Real-time configuration updates without restarts</p>
+                </div>
+                <div class="feature">
+                    <h3>🛡️ Advanced Middleware</h3>
+                    <p>Built-in rate limiting, CORS, and security headers</p>
+                </div>
+                <div class="feature">
+                    <h3>🔒 Automatic HTTPS</h3>
+                    <p>Let's Encrypt integration with automatic cert management</p>
+                </div>
+                <div class="feature">
+                    <h3>📊 Observability</h3>
+                    <p>Prometheus metrics, tracing, and access logs</p>
+                </div>
+                <div class="feature">
+                    <h3>⚡ Circuit Breaker</h3>
+                    <p>Intelligent failure detection and recovery</p>
+                </div>
+            </div>
+            
+            <div class="links">
+                <a href="/health">Health Check</a>
+                <a href="/metrics">Metrics</a>
+                <a href="https://doc.traefik.io/traefik/" target="_blank">Traefik Docs</a>
+            </div>
+            
+            <p style="margin-top: 2rem; color: #666; font-size: 0.9rem;">
+                Deployment time: <span id="timestamp"></span>
+            </p>
+        </div>
+        
+        <script>
+            document.getElementById('timestamp').textContent = new Date().toLocaleString();
+            
+            // Health check display
+            fetch('/health')
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Health check:', data);
+                })
+                .catch(error => {
+                    console.log('Health check error:', error);
+                });
+        </script>
+    </body>
+    </html>
+
+  api.json: |
+    {
+      "service": "rwwwrse-sample-api",
+      "version": "1.0.0",
+      "platform": "Kubernetes with Traefik",
+      "features": [
+        "CRD-Based Routing",
+        "Dynamic Configuration",
+        "Middleware Pipeline",
+        "Auto HTTPS",
+        "Circuit Breaker",
+        "Rate Limiting"
+      ],
+      "endpoints": {
+        "health": "/health",
+        "metrics": "/metrics",
+        "api": "/api/v1"
+      },
+      "traefik_features": {
+        "controller": "Traefik",
+        "crds": true,
+        "middlewares": true,
+        "tls_options": true,
+        "ingressroutes": true,
+        "dynamic_config": true,
+        "dashboard": true,
+        "metrics": true,
+        "tracing": true
+      }
+    }
+
+---
+# Traefik Dashboard Configuration (if needed)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: traefik-dashboard-config
+  namespace: traefik-system
+  labels:
+    app.kubernetes.io/name: traefik
+    app.kubernetes.io/instance: traefik
+data:
+  # Traefik static configuration
+  traefik.yml: |
+    global:
+      checkNewVersion: false
+      sendAnonymousUsage: false
+
+    api:
+      dashboard: true
+      insecure: false
+
+    entryPoints:
+      web:
+        address: ":80"
+        http:
+          redirections:
+            entrypoint:
+              to: websecure
+              scheme: https
+              permanent: true
+      websecure:
+        address: ":443"
+        http:
+          tls:
+            options: modern-tls@kubernetescrd
+      traefik:
+        address: ":8080"
+
+    providers:
+      kubernetescrd:
+        endpoints:
+          - "https://kubernetes.default.svc"
+        ingressClass: traefik
+
+    certificatesResolvers:
+      letsencrypt:
+        acme:
+          tlsChallenge: {}
+          email: admin@example.com
+          storage: /data/acme.json
+          caServer: https://acme-v02.api.letsencrypt.org/directory
+
+    metrics:
+      prometheus:
+        addEntryPointsLabels: true
+        addServicesLabels: true
+        entryPoint: traefik
+
+    tracing:
+      jaeger:
+        samplingServerURL: http://jaeger:5778/sampling
+        localAgentHostPort: jaeger:6831
+
+    accessLog:
+      format: json
+      fields:
+        headers:
+          defaultMode: keep
+          names:
+            User-Agent: redact
+            Authorization: drop
+            Content-Type: keep
+
+    log:
+      level: INFO
+      format: json
+
+---
+# Traefik Dynamic Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: traefik-dynamic-config
+  namespace: traefik-system
+  labels:
+    app.kubernetes.io/name: traefik
+    app.kubernetes.io/instance: traefik
+data:
+  # Dynamic configuration file
+  dynamic.yml: |
+    # Global middleware
+    http:
+      middlewares:
+        default-headers:
+          headers:
+            frameDeny: true
+            sslRedirect: true
+            browserXssFilter: true
+            contentTypeNosniff: true
+            forceSTSHeader: true
+            stsIncludeSubdomains: true
+            stsPreload: true
+            stsSeconds: 31536000
+            customFrameOptionsValue: SAMEORIGIN
+            referrerPolicy: "strict-origin-when-cross-origin"
+            customRequestHeaders:
+              X-Forwarded-Proto: https
+
+        secure-headers:
+          headers:
+            accessControlAllowMethods:
+              - GET
+              - OPTIONS
+              - PUT
+            accessControlMaxAge: 100
+            hostsProxyHeaders:
+              - "X-Forwarded-Host"
+            referrerPolicy: "same-origin"
+
+    # TLS configuration
+    tls:
+      options:
+        modern-tls:
+          sslStrategies:
+            - "tls.SniStrict"
+          minVersion: "VersionTLS12"
+          maxVersion: "VersionTLS13"
+          cipherSuites:
+            - "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"
+            - "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+            - "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384"
+            - "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+            - "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305"
+            - "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305"
+          curvePreferences:
+            - CurveP521
+            - CurveP384
+          sniStrict: true

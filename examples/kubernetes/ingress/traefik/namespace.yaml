@@ -1,0 +1,302 @@
+# Traefik Ingress Controller Namespace Configuration for rwwwrse
+# This file creates a dedicated namespace and resources for rwwwrse with Traefik integration
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rwwwrse
+  labels:
+    # Standard Kubernetes labels
+    app.kubernetes.io/name: rwwwrse
+    app.kubernetes.io/instance: rwwwrse-traefik-ingress
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/component: reverse-proxy
+    app.kubernetes.io/part-of: rwwwrse-platform
+    app.kubernetes.io/managed-by: kubectl
+    
+    # Traefik specific labels
+    ingress.kubernetes.io/controller: traefik
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+    
+    # Environment and deployment labels
+    environment: production
+    platform: kubernetes
+    deployment-method: traefik-ingress
+    
+    # Monitoring and observability labels
+    monitoring.enabled: "true"
+    logging.enabled: "true"
+    tracing.enabled: "true"
+    
+    # Security labels
+    security.pod-security-standard: "restricted"
+    network-policy.enabled: "true"
+    
+  annotations:
+    # Traefik integration
+    traefik.ingress.kubernetes.io/router.middlewares: default-secure-headers@kubernetescrd
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.tls.certresolver: "letsencrypt"
+    
+    # Description and documentation
+    kubernetes.io/description: "rwwwrse reverse proxy server with Traefik Ingress Controller"
+    deployment.kubernetes.io/documentation: "https://github.com/your-org/rwwwrse/tree/main/examples/kubernetes/ingress/traefik"
+    
+    # Resource management
+    resources.kubernetes.io/auto-scaling: "enabled"
+    resources.kubernetes.io/cost-optimization: "enabled"
+    
+    # Network policies and security
+    network.kubernetes.io/policy-enabled: "true"
+    security.kubernetes.io/pod-security-standard: "restricted"
+    
+    # SSL/TLS management
+    traefik.ingress.kubernetes.io/ssl-redirect: "true"
+    traefik.ingress.kubernetes.io/frontend-entry-points: "http,https"
+    
+    # Creation timestamp for tracking
+    created-by: "rwwwrse-traefik-ingress-deployment"
+    
+---
+# Network Policy for Traefik Integration
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rwwwrse-traefik-network-policy
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: network-policy
+    ingress-controller: traefik
+  annotations:
+    network.kubernetes.io/policy-type: "ingress-egress"
+    traefik.ingress.kubernetes.io/description: "Network policy for rwwwrse with Traefik ingress"
+spec:
+  podSelector:
+    matchLabels:
+      app: rwwwrse
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  # Ingress rules - Allow traffic from Traefik namespace
+  ingress:
+  # Allow traffic from Traefik Ingress Controller namespace
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: traefik-system
+    - namespaceSelector:
+        matchLabels:
+          app.kubernetes.io/name: traefik
+    - namespaceSelector:
+        matchLabels:
+          name: traefik
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 8443
+  
+  # Allow traffic from within the same namespace
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: rwwwrse
+    - podSelector:
+        matchLabels:
+          app: rwwwrse
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 8443
+  
+  # Allow health checks from anywhere (needed for load balancer health probes)
+  - from: []
+    ports:
+    - protocol: TCP
+      port: 8080
+      # Health check endpoint
+  
+  # Egress rules - Allow necessary outbound traffic
+  egress:
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  
+  # Allow HTTPS for certificate management and external APIs
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+  
+  # Allow HTTP for internal services and Let's Encrypt challenges
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 80
+  
+  # Allow communication within namespace
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: rwwwrse
+  
+  # Allow communication to backend services in default namespace
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: default
+    ports:
+    - protocol: TCP
+      port: 3000
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 9000
+
+---
+# Resource Quota for the rwwwrse namespace
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: rwwwrse-traefik-resource-quota
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: resource-quota
+    ingress-controller: traefik
+  annotations:
+    resource.kubernetes.io/description: "Resource quota for rwwwrse with Traefik ingress"
+spec:
+  hard:
+    # Compute resources
+    requests.cpu: "2"
+    requests.memory: 4Gi
+    limits.cpu: "4"
+    limits.memory: 8Gi
+    
+    # Storage resources
+    requests.storage: 50Gi
+    persistentvolumeclaims: "5"
+    
+    # Object counts
+    pods: "20"
+    services: "5"
+    configmaps: "10"
+    secrets: "10"
+    
+    # Traefik CRDs
+    ingressroutes.traefik.containo.us: "10"
+    middlewares.traefik.containo.us: "20"
+    tlsoptions.traefik.containo.us: "5"
+    traefikservices.traefik.containo.us: "5"
+    
+    # Service types (LoadBalancer not needed with ingress)
+    services.loadbalancer: "0"
+    services.nodeport: "2"
+    
+---
+# Limit Range to set default resource limits
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: rwwwrse-traefik-limit-range
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: limit-range
+    ingress-controller: traefik
+  annotations:
+    resource.kubernetes.io/description: "Default resource limits for rwwwrse with Traefik ingress"
+spec:
+  limits:
+  # Default limits for containers
+  - default:
+      cpu: 500m
+      memory: 512Mi
+    defaultRequest:
+      cpu: 100m
+      memory: 128Mi
+    type: Container
+  
+  # Limits for pods
+  - max:
+      cpu: "1"
+      memory: 2Gi
+    min:
+      cpu: 50m
+      memory: 64Mi
+    type: Pod
+  
+  # Limits for persistent volume claims
+  - max:
+      storage: 20Gi
+    min:
+      storage: 1Gi
+    type: PersistentVolumeClaim
+
+---
+# Service Account for rwwwrse with Traefik
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rwwwrse-traefik-sa
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: service-account
+    ingress-controller: traefik
+  annotations:
+    traefik.ingress.kubernetes.io/service-account: "rwwwrse-traefik-sa"
+automountServiceAccountToken: true
+
+---
+# RBAC Role for rwwwrse service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rwwwrse-traefik-role
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: rbac
+    ingress-controller: traefik
+rules:
+# Allow reading configmaps and secrets
+- apiGroups: [""]
+  resources: ["configmaps", "secrets"]
+  verbs: ["get", "list", "watch"]
+# Allow reading services and endpoints
+- apiGroups: [""]
+  resources: ["services", "endpoints"]
+  verbs: ["get", "list", "watch"]
+# Allow reading Traefik CRDs
+- apiGroups: ["traefik.containo.us"]
+  resources: ["ingressroutes", "middlewares", "tlsoptions", "traefikservices"]
+  verbs: ["get", "list", "watch"]
+
+---
+# RBAC Role Binding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rwwwrse-traefik-role-binding
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: rbac
+    ingress-controller: traefik
+subjects:
+- kind: ServiceAccount
+  name: rwwwrse-traefik-sa
+  namespace: rwwwrse
+roleRef:
+  kind: Role
+  name: rwwwrse-traefik-role
+  apiGroup: rbac.authorization.k8s.io

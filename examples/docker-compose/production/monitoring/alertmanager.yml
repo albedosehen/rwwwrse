@@ -1,0 +1,266 @@
+# Alertmanager Configuration for rwwwrse Production
+
+global:
+  smtp_smarthost: 'smtp.gmail.com:587'
+  smtp_from: 'alerts@your-domain.com'
+  smtp_auth_username: 'alerts@your-domain.com'
+  smtp_auth_password: '${SMTP_PASSWORD}'
+
+# Route tree for alerts
+route:
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 1h
+  receiver: 'web.hook'
+  routes:
+    # Critical alerts go to multiple channels
+    - match:
+        severity: critical
+      receiver: critical-alerts
+      group_wait: 5s
+      repeat_interval: 15m
+    
+    # Warning alerts
+    - match:
+        severity: warning
+      receiver: warning-alerts
+      repeat_interval: 2h
+    
+    # Security alerts
+    - match:
+        service: security
+      receiver: security-alerts
+      group_wait: 5s
+      repeat_interval: 30m
+    
+    # Database alerts
+    - match:
+        service: postgres
+      receiver: database-alerts
+      repeat_interval: 30m
+    
+    # Monitoring infrastructure alerts
+    - match:
+        service: monitoring
+      receiver: infrastructure-alerts
+      repeat_interval: 1h
+
+# Inhibit rules to prevent spam
+inhibit_rules:
+  # Inhibit any warning-level alerts if critical alert is firing
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'cluster', 'service']
+  
+  # Inhibit high error rate if service is down
+  - source_match:
+      alertname: 'RwwwrseDown'
+    target_match:
+      alertname: 'RwwwrseHighErrorRate'
+    equal: ['instance']
+
+# Receiver configurations
+receivers:
+  - name: 'web.hook'
+    webhook_configs:
+      - url: 'http://localhost:5001/'
+  
+  - name: 'critical-alerts'
+    email_configs:
+      - to: 'critical-alerts@your-domain.com,ops-team@your-domain.com'
+        subject: '🚨 CRITICAL: {{ .GroupLabels.alertname }} - {{ .GroupLabels.service }}'
+        body: |
+          Alert: {{ .GroupLabels.alertname }}
+          Service: {{ .GroupLabels.service }}
+          Severity: {{ .CommonLabels.severity }}
+          
+          {{ range .Alerts }}
+          Instance: {{ .Labels.instance }}
+          Summary: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Started: {{ .StartsAt }}
+          {{ end }}
+          
+          Dashboard: http://grafana.your-domain.com/d/rwwwrse-overview
+        html: |
+          <h2 style="color: #d73027;">🚨 Critical Alert</h2>
+          <p><strong>Alert:</strong> {{ .GroupLabels.alertname }}</p>
+          <p><strong>Service:</strong> {{ .GroupLabels.service }}</p>
+          <p><strong>Severity:</strong> {{ .CommonLabels.severity }}</p>
+          
+          <table border="1" style="border-collapse: collapse;">
+            <tr>
+              <th>Instance</th>
+              <th>Summary</th>
+              <th>Description</th>
+              <th>Started</th>
+            </tr>
+            {{ range .Alerts }}
+            <tr>
+              <td>{{ .Labels.instance }}</td>
+              <td>{{ .Annotations.summary }}</td>
+              <td>{{ .Annotations.description }}</td>
+              <td>{{ .StartsAt }}</td>
+            </tr>
+            {{ end }}
+          </table>
+          
+          <p><a href="http://grafana.your-domain.com/d/rwwwrse-overview">View Dashboard</a></p>
+    
+    slack_configs:
+      - api_url: '${SLACK_WEBHOOK_URL}'
+        channel: '#critical-alerts'
+        title: '🚨 Critical Alert: {{ .GroupLabels.alertname }}'
+        text: |
+          *Service:* {{ .GroupLabels.service }}
+          *Severity:* {{ .CommonLabels.severity }}
+          
+          {{ range .Alerts }}
+          *Instance:* {{ .Labels.instance }}
+          *Summary:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          {{ end }}
+        actions:
+          - type: button
+            text: 'View Dashboard'
+            url: 'http://grafana.your-domain.com/d/rwwwrse-overview'
+    
+    pagerduty_configs:
+      - routing_key: '${PAGERDUTY_INTEGRATION_KEY}'
+        description: '{{ .GroupLabels.alertname }} - {{ .GroupLabels.service }}'
+        severity: 'critical'
+        details:
+          service: '{{ .GroupLabels.service }}'
+          instance: '{{ .CommonLabels.instance }}'
+          summary: '{{ .CommonAnnotations.summary }}'
+  
+  - name: 'warning-alerts'
+    email_configs:
+      - to: 'ops-team@your-domain.com'
+        subject: '⚠️ WARNING: {{ .GroupLabels.alertname }} - {{ .GroupLabels.service }}'
+        body: |
+          Alert: {{ .GroupLabels.alertname }}
+          Service: {{ .GroupLabels.service }}
+          Severity: {{ .CommonLabels.severity }}
+          
+          {{ range .Alerts }}
+          Instance: {{ .Labels.instance }}
+          Summary: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Started: {{ .StartsAt }}
+          {{ end }}
+          
+          Dashboard: http://grafana.your-domain.com/d/rwwwrse-overview
+    
+    slack_configs:
+      - api_url: '${SLACK_WEBHOOK_URL}'
+        channel: '#ops-alerts'
+        title: '⚠️ Warning: {{ .GroupLabels.alertname }}'
+        text: |
+          *Service:* {{ .GroupLabels.service }}
+          *Severity:* {{ .CommonLabels.severity }}
+          
+          {{ range .Alerts }}
+          *Instance:* {{ .Labels.instance }}
+          *Summary:* {{ .Annotations.summary }}
+          {{ end }}
+  
+  - name: 'security-alerts'
+    email_configs:
+      - to: 'security-team@your-domain.com,ops-team@your-domain.com'
+        subject: '🔒 SECURITY ALERT: {{ .GroupLabels.alertname }}'
+        body: |
+          Security Alert: {{ .GroupLabels.alertname }}
+          Severity: {{ .CommonLabels.severity }}
+          
+          {{ range .Alerts }}
+          Instance: {{ .Labels.instance }}
+          Summary: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Started: {{ .StartsAt }}
+          {{ end }}
+          
+          Please investigate immediately.
+          Dashboard: http://grafana.your-domain.com/d/security-overview
+    
+    slack_configs:
+      - api_url: '${SLACK_WEBHOOK_URL}'
+        channel: '#security-alerts'
+        title: '🔒 Security Alert: {{ .GroupLabels.alertname }}'
+        text: |
+          *Severity:* {{ .CommonLabels.severity }}
+          
+          {{ range .Alerts }}
+          *Instance:* {{ .Labels.instance }}
+          *Summary:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          {{ end }}
+          
+          *Action Required:* Immediate investigation needed
+        color: danger
+  
+  - name: 'database-alerts'
+    email_configs:
+      - to: 'dba-team@your-domain.com,ops-team@your-domain.com'
+        subject: '🗄️ DATABASE ALERT: {{ .GroupLabels.alertname }}'
+        body: |
+          Database Alert: {{ .GroupLabels.alertname }}
+          Service: {{ .GroupLabels.service }}
+          Severity: {{ .CommonLabels.severity }}
+          
+          {{ range .Alerts }}
+          Instance: {{ .Labels.instance }}
+          Summary: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Started: {{ .StartsAt }}
+          {{ end }}
+          
+          Dashboard: http://grafana.your-domain.com/d/postgres-overview
+    
+    slack_configs:
+      - api_url: '${SLACK_WEBHOOK_URL}'
+        channel: '#database-alerts'
+        title: '🗄️ Database Alert: {{ .GroupLabels.alertname }}'
+        text: |
+          *Service:* {{ .GroupLabels.service }}
+          *Severity:* {{ .CommonLabels.severity }}
+          
+          {{ range .Alerts }}
+          *Instance:* {{ .Labels.instance }}
+          *Summary:* {{ .Annotations.summary }}
+          {{ end }}
+  
+  - name: 'infrastructure-alerts'
+    email_configs:
+      - to: 'ops-team@your-domain.com'
+        subject: '🔧 INFRASTRUCTURE: {{ .GroupLabels.alertname }}'
+        body: |
+          Infrastructure Alert: {{ .GroupLabels.alertname }}
+          Service: {{ .GroupLabels.service }}
+          Severity: {{ .CommonLabels.severity }}
+          
+          {{ range .Alerts }}
+          Instance: {{ .Labels.instance }}
+          Summary: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Started: {{ .StartsAt }}
+          {{ end }}
+    
+    slack_configs:
+      - api_url: '${SLACK_WEBHOOK_URL}'
+        channel: '#infrastructure-alerts'
+        title: '🔧 Infrastructure Alert: {{ .GroupLabels.alertname }}'
+        text: |
+          *Service:* {{ .GroupLabels.service }}
+          *Severity:* {{ .CommonLabels.severity }}
+          
+          {{ range .Alerts }}
+          *Summary:* {{ .Annotations.summary }}
+          {{ end }}
+
+# Templates for custom formatting
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'

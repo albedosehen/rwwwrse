@@ -1,0 +1,559 @@
+# NGINX Ingress Controller Deployment Configuration for rwwwrse
+# This file deploys rwwwrse with NGINX Ingress Controller integration
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rwwwrse
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: reverse-proxy
+    version: v1.0.0
+    ingress-controller: nginx
+    app.kubernetes.io/name: rwwwrse
+    app.kubernetes.io/instance: rwwwrse-nginx
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/component: reverse-proxy
+    app.kubernetes.io/part-of: rwwwrse-platform
+    app.kubernetes.io/managed-by: kubectl
+  annotations:
+    # NGINX Ingress specific annotations
+    nginx.ingress.kubernetes.io/rewrite-target: "/"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    
+    # Deployment configuration
+    deployment.kubernetes.io/revision: "1"
+    kubernetes.io/description: "rwwwrse reverse proxy deployment with NGINX ingress"
+    
+    # Monitoring annotations
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/metrics"
+    prometheus.io/port: "8080"
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: rwwwrse
+      component: reverse-proxy
+  template:
+    metadata:
+      labels:
+        app: rwwwrse
+        component: reverse-proxy
+        version: v1.0.0
+        ingress-controller: nginx
+      annotations:
+        # NGINX Ingress annotations
+        nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+        nginx.ingress.kubernetes.io/upstream-hash-by: "$request_uri"
+        
+        # Prometheus scraping
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "8080"
+        
+        # Configuration checksum for rolling updates
+        checksum/config: ""  # Will be calculated during deployment
+    spec:
+      serviceAccountName: rwwwrse-nginx-sa
+      automountServiceAccountToken: true
+      
+      # Security context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+        supplementalGroups: [65534]
+      
+      # Node selection for optimal performance with ingress
+      nodeSelector:
+        kubernetes.io/os: linux
+      
+      # Prefer different nodes and zones for high availability
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values: [rwwwrse]
+              topologyKey: kubernetes.io/hostname
+          - weight: 50
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values: [rwwwrse]
+              topologyKey: topology.kubernetes.io/zone
+        
+        # Prefer nodes close to NGINX ingress pods
+        podAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 50
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values: [ingress-nginx]
+              topologyKey: kubernetes.io/hostname
+      
+      # Init containers for setup
+      initContainers:
+      - name: cert-dir-setup
+        image: busybox:1.35
+        command: ['sh', '-c', 'mkdir -p /tmp/certs && chmod 755 /tmp/certs']
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65534
+          runAsGroup: 65534
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+        - name: cert-storage
+          mountPath: /tmp/certs
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 50m
+            memory: 32Mi
+      
+      containers:
+      - name: rwwwrse
+        image: "rwwwrse:latest"
+        imagePullPolicy: Always
+        
+        # Security context
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65534
+          runAsGroup: 65534
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        
+        # Container ports
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        - name: https
+          containerPort: 8443
+          protocol: TCP
+        - name: metrics
+          containerPort: 8080
+          protocol: TCP
+        
+        # Environment variables from ConfigMap and Secrets
+        envFrom:
+        - configMapRef:
+            name: rwwwrse-nginx-config
+        - secretRef:
+            name: rwwwrse-nginx-secrets
+            optional: true
+        
+        # Additional environment variables
+        env:
+        # Kubernetes API integration
+        - name: RWWWRSE_K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: RWWWRSE_K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: RWWWRSE_K8S_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: RWWWRSE_K8S_POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        
+        # NGINX Ingress specific environment variables
+        - name: RWWWRSE_INGRESS_CONTROLLER
+          value: "nginx"
+        - name: RWWWRSE_BEHIND_PROXY
+          value: "true"
+        - name: RWWWRSE_TRUST_PROXY
+          value: "true"
+        - name: RWWWRSE_PROXY_PROTOCOL
+          value: "false"  # NGINX handles this
+        
+        # Resource requests and limits
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+            ephemeral-storage: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+            ephemeral-storage: 1Gi
+        
+        # Volume mounts
+        volumeMounts:
+        # Certificate storage
+        - name: cert-storage
+          mountPath: /tmp/certs
+        
+        # Content and configuration
+        - name: sample-content
+          mountPath: /app/static
+          readOnly: true
+        
+        # Health checks optimized for ingress
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+            scheme: HTTP
+            httpHeaders:
+            - name: Host
+              value: localhost
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+            scheme: HTTP
+            httpHeaders:
+            - name: Host
+              value: localhost
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+            scheme: HTTP
+            httpHeaders:
+            - name: Host
+              value: localhost
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 30
+      
+      # Volumes
+      volumes:
+      # Certificate storage (emptyDir for NGINX ingress managed certs)
+      - name: cert-storage
+        emptyDir:
+          medium: Memory
+          sizeLimit: 50Mi
+      
+      # Sample content
+      - name: sample-content
+        configMap:
+          name: sample-content
+          defaultMode: 420
+      
+      # DNS configuration for better performance
+      dnsPolicy: ClusterFirst
+      dnsConfig:
+        options:
+        - name: ndots
+          value: "2"
+        - name: edns0
+      
+      # Termination grace period
+      terminationGracePeriodSeconds: 30
+
+---
+# Service for rwwwrse (ClusterIP since NGINX ingress will handle external access)
+apiVersion: v1
+kind: Service
+metadata:
+  name: rwwwrse
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: service
+    ingress-controller: nginx
+  annotations:
+    # NGINX Ingress Controller annotations
+    nginx.ingress.kubernetes.io/service-upstream: "true"
+    nginx.ingress.kubernetes.io/upstream-hash-by: "$request_uri"
+    
+    # Service configuration
+    service.kubernetes.io/load-balancer-class: "nginx"
+    
+    # Monitoring annotations
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/metrics"
+    prometheus.io/port: "8080"
+spec:
+  type: ClusterIP  # No LoadBalancer needed with ingress
+  sessionAffinity: None
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+    protocol: TCP
+  - name: https
+    port: 443
+    targetPort: https
+    protocol: TCP
+  - name: metrics
+    port: 8080
+    targetPort: metrics
+    protocol: TCP
+  selector:
+    app: rwwwrse
+    component: reverse-proxy
+
+---
+# Ingress configuration for rwwwrse with NGINX
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rwwwrse-ingress
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: ingress
+    ingress-controller: nginx
+  annotations:
+    # NGINX Ingress Controller class
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/ingress.class: "nginx"
+    
+    # SSL/TLS configuration
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/ssl-protocols: "TLSv1.2 TLSv1.3"
+    nginx.ingress.kubernetes.io/ssl-ciphers: "ECDHE-ECDSA-AES128-GCM-SHA256,ECDHE-RSA-AES128-GCM-SHA256,ECDHE-ECDSA-AES256-GCM-SHA384,ECDHE-RSA-AES256-GCM-SHA384"
+    
+    # Certificate management with cert-manager
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    cert-manager.io/acme-challenge-type: "http01"
+    
+    # Backend configuration
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    nginx.ingress.kubernetes.io/upstream-hash-by: "$request_uri"
+    nginx.ingress.kubernetes.io/load-balance: "round_robin"
+    
+    # Request/Response modifications
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-next-upstream: "error timeout http_502 http_503 http_504"
+    
+    # Custom headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Forwarded-Proto $scheme";
+      more_set_headers "X-Real-IP $remote_addr";
+      more_set_headers "X-Forwarded-For $proxy_add_x_forwarded_for";
+      more_set_headers "X-Ingress-Controller nginx";
+      more_set_headers "X-Request-ID $request_id";
+    
+    # Rate limiting
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    nginx.ingress.kubernetes.io/rate-limit-connections: "10"
+    
+    # CORS configuration
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://app.example.com,https://web.example.com"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET,POST,PUT,DELETE,OPTIONS,PATCH"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "Origin,Content-Type,Accept,Authorization,X-Requested-With,X-Request-ID"
+    nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
+    nginx.ingress.kubernetes.io/cors-max-age: "86400"
+    
+    # Security headers
+    nginx.ingress.kubernetes.io/custom-http-errors: "404,503"
+    nginx.ingress.kubernetes.io/default-backend: "default-http-backend"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - api.example.com
+    - app.example.com
+    - web.example.com
+    - admin.example.com
+    secretName: rwwwrse-tls-cert
+  rules:
+  # API service
+  - host: api.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: rwwwrse
+            port:
+              number: 80
+  
+  # Frontend application
+  - host: app.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: rwwwrse
+            port:
+              number: 80
+  
+  # Web service
+  - host: web.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: rwwwrse
+            port:
+              number: 80
+  
+  # Admin interface
+  - host: admin.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: rwwwrse
+            port:
+              number: 80
+
+---
+# Horizontal Pod Autoscaler
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: rwwwrse-hpa
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: autoscaler
+    ingress-controller: nginx
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: rwwwrse
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+      selectPolicy: Min
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 60
+      - type: Pods
+        value: 4
+        periodSeconds: 60
+      selectPolicy: Max
+
+---
+# Pod Disruption Budget
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rwwwrse-pdb
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: disruption-budget
+    ingress-controller: nginx
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: rwwwrse
+      component: reverse-proxy
+
+---
+# Service Monitor for Prometheus
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: rwwwrse-metrics
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: monitoring
+    ingress-controller: nginx
+spec:
+  selector:
+    matchLabels:
+      app: rwwwrse
+      component: service
+  endpoints:
+  - port: metrics
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s
+    honorLabels: true
+    relabelings:
+    - sourceLabels: [__meta_kubernetes_pod_name]
+      targetLabel: pod
+    - sourceLabels: [__meta_kubernetes_namespace]
+      targetLabel: namespace
+    - sourceLabels: [__meta_kubernetes_service_name]
+      targetLabel: service
+    - sourceLabels: [__meta_kubernetes_ingress_name]
+      targetLabel: ingress
+      replacement: nginx

@@ -1,0 +1,734 @@
+# Traefik Ingress Controller Deployment Configuration for rwwwrse
+# This file deploys rwwwrse with Traefik CRDs for advanced traffic management
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rwwwrse
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: reverse-proxy
+    version: v1.0.0
+    ingress-controller: traefik
+    app.kubernetes.io/name: rwwwrse
+    app.kubernetes.io/instance: rwwwrse-traefik
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/component: reverse-proxy
+    app.kubernetes.io/part-of: rwwwrse-platform
+    app.kubernetes.io/managed-by: kubectl
+  annotations:
+    # Traefik specific annotations
+    traefik.ingress.kubernetes.io/router.entrypoints: "web,websecure"
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.tls.certresolver: "letsencrypt"
+    
+    # Deployment configuration
+    deployment.kubernetes.io/revision: "1"
+    kubernetes.io/description: "rwwwrse reverse proxy deployment with Traefik ingress"
+    
+    # Monitoring annotations
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/metrics"
+    prometheus.io/port: "8080"
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: rwwwrse
+      component: reverse-proxy
+  template:
+    metadata:
+      labels:
+        app: rwwwrse
+        component: reverse-proxy
+        version: v1.0.0
+        ingress-controller: traefik
+      annotations:
+        # Traefik annotations
+        traefik.ingress.kubernetes.io/service.loadbalancer.passhostheader: "true"
+        traefik.ingress.kubernetes.io/service.loadbalancer.healthcheck.path: "/health"
+        
+        # Prometheus scraping
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "8080"
+        
+        # Configuration checksum for rolling updates
+        checksum/config: ""  # Will be calculated during deployment
+    spec:
+      serviceAccountName: rwwwrse-traefik-sa
+      automountServiceAccountToken: true
+      
+      # Security context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+        supplementalGroups: [65534]
+      
+      # Node selection for optimal performance
+      nodeSelector:
+        kubernetes.io/os: linux
+      
+      # Prefer different nodes and zones for high availability
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values: [rwwwrse]
+              topologyKey: kubernetes.io/hostname
+          - weight: 50
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values: [rwwwrse]
+              topologyKey: topology.kubernetes.io/zone
+        
+        # Prefer nodes close to Traefik pods
+        podAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 50
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values: [traefik]
+              topologyKey: kubernetes.io/hostname
+      
+      # Init containers for setup
+      initContainers:
+      - name: cert-dir-setup
+        image: busybox:1.35
+        command: ['sh', '-c', 'mkdir -p /tmp/certs && chmod 755 /tmp/certs']
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65534
+          runAsGroup: 65534
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+        - name: cert-storage
+          mountPath: /tmp/certs
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 50m
+            memory: 32Mi
+      
+      containers:
+      - name: rwwwrse
+        image: "rwwwrse:latest"
+        imagePullPolicy: Always
+        
+        # Security context
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65534
+          runAsGroup: 65534
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        
+        # Container ports
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        - name: https
+          containerPort: 8443
+          protocol: TCP
+        - name: metrics
+          containerPort: 8080
+          protocol: TCP
+        
+        # Environment variables from ConfigMap and Secrets
+        envFrom:
+        - configMapRef:
+            name: rwwwrse-traefik-config
+        - secretRef:
+            name: rwwwrse-traefik-secrets
+            optional: true
+        
+        # Additional environment variables
+        env:
+        # Kubernetes API integration
+        - name: RWWWRSE_K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: RWWWRSE_K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: RWWWRSE_K8S_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: RWWWRSE_K8S_POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        
+        # Traefik specific environment variables
+        - name: RWWWRSE_INGRESS_CONTROLLER
+          value: "traefik"
+        - name: RWWWRSE_BEHIND_PROXY
+          value: "true"
+        - name: RWWWRSE_TRUST_PROXY
+          value: "true"
+        - name: RWWWRSE_PROXY_PROTOCOL
+          value: "false"  # Traefik handles this
+        
+        # Resource requests and limits
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+            ephemeral-storage: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+            ephemeral-storage: 1Gi
+        
+        # Volume mounts
+        volumeMounts:
+        # Certificate storage
+        - name: cert-storage
+          mountPath: /tmp/certs
+        
+        # Content and configuration
+        - name: sample-content
+          mountPath: /app/static
+          readOnly: true
+        
+        # Health checks optimized for Traefik
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+            scheme: HTTP
+            httpHeaders:
+            - name: Host
+              value: localhost
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+            scheme: HTTP
+            httpHeaders:
+            - name: Host
+              value: localhost
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+            scheme: HTTP
+            httpHeaders:
+            - name: Host
+              value: localhost
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 30
+      
+      # Volumes
+      volumes:
+      # Certificate storage (emptyDir for Traefik managed certs)
+      - name: cert-storage
+        emptyDir:
+          medium: Memory
+          sizeLimit: 50Mi
+      
+      # Sample content
+      - name: sample-content
+        configMap:
+          name: sample-content
+          defaultMode: 420
+      
+      # DNS configuration for better performance
+      dnsPolicy: ClusterFirst
+      dnsConfig:
+        options:
+        - name: ndots
+          value: "2"
+        - name: edns0
+      
+      # Termination grace period
+      terminationGracePeriodSeconds: 30
+
+---
+# Service for rwwwrse (ClusterIP since Traefik handles external access)
+apiVersion: v1
+kind: Service
+metadata:
+  name: rwwwrse
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: service
+    ingress-controller: traefik
+  annotations:
+    # Traefik service annotations
+    traefik.ingress.kubernetes.io/service.loadbalancer.sticky: "false"
+    traefik.ingress.kubernetes.io/service.loadbalancer.passhostheader: "true"
+    traefik.ingress.kubernetes.io/service.loadbalancer.healthcheck.path: "/health"
+    traefik.ingress.kubernetes.io/service.loadbalancer.healthcheck.interval: "30s"
+    
+    # Monitoring annotations
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/metrics"
+    prometheus.io/port: "8080"
+spec:
+  type: ClusterIP  # No LoadBalancer needed with Traefik
+  sessionAffinity: None
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+    protocol: TCP
+  - name: https
+    port: 443
+    targetPort: https
+    protocol: TCP
+  - name: metrics
+    port: 8080
+    targetPort: metrics
+    protocol: TCP
+  selector:
+    app: rwwwrse
+    component: reverse-proxy
+
+---
+# Traefik Middleware for Security Headers
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: security-headers
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: middleware
+    type: security
+spec:
+  headers:
+    frameDeny: true
+    contentTypeNosniff: true
+    browserXssFilter: true
+    referrerPolicy: "strict-origin-when-cross-origin"
+    forceSTSHeader: true
+    stsIncludeSubdomains: true
+    stsPreload: true
+    stsSeconds: 31536000
+    customRequestHeaders:
+      X-Forwarded-Proto: "https"
+    customResponseHeaders:
+      X-Robots-Tag: "none,noarchive,nosnippet,notranslate,noimageindex"
+      server: ""
+
+---
+# Traefik Middleware for Rate Limiting
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: rate-limit
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: middleware
+    type: rate-limit
+spec:
+  rateLimit:
+    burst: 100
+    average: 100
+    period: "1m"
+    sourceCriterion:
+      ipStrategy:
+        depth: 1
+
+---
+# Traefik Middleware for CORS
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: cors
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: middleware
+    type: cors
+spec:
+  headers:
+    accessControlAllowMethods:
+      - "GET"
+      - "POST"
+      - "PUT"
+      - "DELETE"
+      - "OPTIONS"
+      - "PATCH"
+    accessControlAllowOriginList:
+      - "https://app.example.com"
+      - "https://web.example.com"
+      - "https://admin.example.com"
+    accessControlAllowHeaders:
+      - "Origin"
+      - "Content-Type"
+      - "Accept"
+      - "Authorization"
+      - "X-Requested-With"
+      - "X-Request-ID"
+    accessControlAllowCredentials: true
+    accessControlMaxAge: 86400
+
+---
+# Traefik Middleware for Compression
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: compression
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: middleware
+    type: compression
+spec:
+  compress:
+    excludedContentTypes:
+      - "text/event-stream"
+
+---
+# Traefik Middleware for Circuit Breaker
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: circuit-breaker
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: middleware
+    type: circuit-breaker
+spec:
+  circuitBreaker:
+    expression: "NetworkErrorRatio() > 0.10 || ResponseCodeRatio(500, 600, 0, 600) > 0.25"
+    checkPeriod: "10s"
+    fallbackDuration: "60s"
+    recoveryDuration: "30s"
+
+---
+# Traefik TLS Options
+apiVersion: traefik.containo.us/v1alpha1
+kind: TLSOption
+metadata:
+  name: modern-tls
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: tls-config
+spec:
+  minVersion: "VersionTLS12"
+  maxVersion: "VersionTLS13"
+  cipherSuites:
+    - "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"
+    - "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+    - "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384"
+    - "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+    - "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305"
+    - "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305"
+  curvePreferences:
+    - "CurveP521"
+    - "CurveP384"
+  sniStrict: true
+
+---
+# Traefik IngressRoute for API
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: rwwwrse-api
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: ingress-route
+    service: api
+spec:
+  entryPoints:
+    - websecure
+  routes:
+  - match: Host(`api.example.com`)
+    kind: Rule
+    services:
+    - name: rwwwrse
+      port: 80
+    middlewares:
+    - name: security-headers
+    - name: rate-limit
+    - name: compression
+    - name: circuit-breaker
+  tls:
+    secretName: rwwwrse-api-tls
+    options:
+      name: modern-tls
+
+---
+# Traefik IngressRoute for Frontend App
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: rwwwrse-app
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: ingress-route
+    service: app
+spec:
+  entryPoints:
+    - websecure
+  routes:
+  - match: Host(`app.example.com`)
+    kind: Rule
+    services:
+    - name: rwwwrse
+      port: 80
+    middlewares:
+    - name: security-headers
+    - name: cors
+    - name: compression
+  tls:
+    secretName: rwwwrse-app-tls
+    options:
+      name: modern-tls
+
+---
+# Traefik IngressRoute for Web Service
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: rwwwrse-web
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: ingress-route
+    service: web
+spec:
+  entryPoints:
+    - websecure
+  routes:
+  - match: Host(`web.example.com`)
+    kind: Rule
+    services:
+    - name: rwwwrse
+      port: 80
+    middlewares:
+    - name: security-headers
+    - name: compression
+    - name: circuit-breaker
+  tls:
+    secretName: rwwwrse-web-tls
+    options:
+      name: modern-tls
+
+---
+# Traefik IngressRoute for Admin
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: rwwwrse-admin
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: ingress-route
+    service: admin
+spec:
+  entryPoints:
+    - websecure
+  routes:
+  - match: Host(`admin.example.com`)
+    kind: Rule
+    services:
+    - name: rwwwrse
+      port: 80
+    middlewares:
+    - name: security-headers
+    - name: rate-limit
+    - name: compression
+  tls:
+    secretName: rwwwrse-admin-tls
+    options:
+      name: modern-tls
+
+---
+# HTTP to HTTPS Redirect
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: rwwwrse-redirect
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: ingress-route
+    type: redirect
+spec:
+  entryPoints:
+    - web
+  routes:
+  - match: Host(`api.example.com`) || Host(`app.example.com`) || Host(`web.example.com`) || Host(`admin.example.com`)
+    kind: Rule
+    services:
+    - name: api@internal
+      kind: TraefikService
+    middlewares:
+    - name: https-redirect
+
+---
+# HTTPS Redirect Middleware
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: https-redirect
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: middleware
+    type: redirect
+spec:
+  redirectScheme:
+    scheme: "https"
+    permanent: true
+
+---
+# Horizontal Pod Autoscaler
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: rwwwrse-hpa
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: autoscaler
+    ingress-controller: traefik
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: rwwwrse
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+      selectPolicy: Min
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 60
+      - type: Pods
+        value: 4
+        periodSeconds: 60
+      selectPolicy: Max
+
+---
+# Pod Disruption Budget
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rwwwrse-pdb
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: disruption-budget
+    ingress-controller: traefik
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: rwwwrse
+      component: reverse-proxy
+
+---
+# Service Monitor for Prometheus
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: rwwwrse-metrics
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: monitoring
+    ingress-controller: traefik
+spec:
+  selector:
+    matchLabels:
+      app: rwwwrse
+      component: service
+  endpoints:
+  - port: metrics
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s
+    honorLabels: true
+    relabelings:
+    - sourceLabels: [__meta_kubernetes_pod_name]
+      targetLabel: pod
+    - sourceLabels: [__meta_kubernetes_namespace]
+      targetLabel: namespace
+    - sourceLabels: [__meta_kubernetes_service_name]
+      targetLabel: service
+    - sourceLabels: [__meta_kubernetes_ingressroute_name]
+      targetLabel: ingress_route
+      replacement: traefik

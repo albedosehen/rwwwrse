@@ -1,0 +1,45 @@
+# Namespace for rwwwrse minikube deployment
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rwwwrse
+  labels:
+    name: rwwwrse
+    environment: development
+    managed-by: minikube
+---
+# Resource quota for the namespace
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: rwwwrse-quota
+  namespace: rwwwrse
+spec:
+  hard:
+    requests.cpu: "2"
+    requests.memory: 4Gi
+    limits.cpu: "4"
+    limits.memory: 8Gi
+    persistentvolumeclaims: "5"
+    services: "10"
+    secrets: "10"
+    configmaps: "10"
+---
+# Limit range for pods in the namespace
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: rwwwrse-limits
+  namespace: rwwwrse
+spec:
+  limits:
+  - default:
+      cpu: "200m"
+      memory: "256Mi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "128Mi"
+    type: Container
+  - default:
+      storage: "1Gi"
+    type: PersistentVolumeClaim

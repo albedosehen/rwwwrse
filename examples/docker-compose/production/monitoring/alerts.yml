@@ -1,0 +1,283 @@
+# Prometheus Alerting Rules for rwwwrse Production
+
+groups:
+  - name: rwwwrse.rules
+    rules:
+      # rwwwrse specific alerts
+      - alert: RwwwrseDown
+        expr: up{job="rwwwrse"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          service: rwwwrse
+        annotations:
+          summary: "rwwwrse proxy is down"
+          description: "rwwwrse proxy has been down for more than 30 seconds"
+
+      - alert: RwwwrseHighResponseTime
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="rwwwrse"}[5m])) > 1
+        for: 2m
+        labels:
+          severity: warning
+          service: rwwwrse
+        annotations:
+          summary: "rwwwrse high response time"
+          description: "95th percentile response time is {{ $value }}s for more than 2 minutes"
+
+      - alert: RwwwrseHighErrorRate
+        expr: rate(http_requests_total{job="rwwwrse",status=~"5.."}[5m]) / rate(http_requests_total{job="rwwwrse"}[5m]) > 0.05
+        for: 1m
+        labels:
+          severity: critical
+          service: rwwwrse
+        annotations:
+          summary: "rwwwrse high error rate"
+          description: "Error rate is {{ $value | humanizePercentage }} for more than 1 minute"
+
+      - alert: RwwwrseHighMemoryUsage
+        expr: (process_resident_memory_bytes{job="rwwwrse"} / 1024 / 1024) > 512
+        for: 5m
+        labels:
+          severity: warning
+          service: rwwwrse
+        annotations:
+          summary: "rwwwrse high memory usage"
+          description: "Memory usage is {{ $value }}MB for more than 5 minutes"
+
+  - name: application.rules
+    rules:
+      # Application server alerts
+      - alert: ApplicationDown
+        expr: up{job=~"app-primary|api-server"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          service: application
+        annotations:
+          summary: "Application server is down"
+          description: "Application server {{ $labels.job }} has been down for more than 30 seconds"
+
+      - alert: ApplicationHighResponseTime
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job=~"app-primary|api-server"}[5m])) > 2
+        for: 2m
+        labels:
+          severity: warning
+          service: application
+        annotations:
+          summary: "Application high response time"
+          description: "95th percentile response time is {{ $value }}s for {{ $labels.job }}"
+
+      - alert: ApplicationHighErrorRate
+        expr: rate(http_requests_total{job=~"app-primary|api-server",status=~"5.."}[5m]) / rate(http_requests_total{job=~"app-primary|api-server"}[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: critical
+          service: application
+        annotations:
+          summary: "Application high error rate"
+          description: "Error rate is {{ $value | humanizePercentage }} for {{ $labels.job }}"
+
+  - name: database.rules
+    rules:
+      # PostgreSQL alerts
+      - alert: PostgreSQLDown
+        expr: up{job="postgres"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          service: postgres
+        annotations:
+          summary: "PostgreSQL is down"
+          description: "PostgreSQL has been down for more than 30 seconds"
+
+      - alert: PostgreSQLHighConnections
+        expr: pg_stat_database_numbackends / pg_settings_max_connections * 100 > 80
+        for: 2m
+        labels:
+          severity: warning
+          service: postgres
+        annotations:
+          summary: "PostgreSQL high connection usage"
+          description: "Connection usage is {{ $value }}% for more than 2 minutes"
+
+      - alert: PostgreSQLSlowQueries
+        expr: rate(pg_stat_activity_max_tx_duration{datname!~"template.*"}[5m]) > 60
+        for: 2m
+        labels:
+          severity: warning
+          service: postgres
+        annotations:
+          summary: "PostgreSQL slow queries detected"
+          description: "Slow queries detected on database {{ $labels.datname }}"
+
+      - alert: PostgreSQLReplicationLag
+        expr: pg_replication_lag > 30
+        for: 1m
+        labels:
+          severity: warning
+          service: postgres
+        annotations:
+          summary: "PostgreSQL replication lag"
+          description: "Replication lag is {{ $value }} seconds"
+
+  - name: cache.rules
+    rules:
+      # Redis alerts
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          service: redis
+        annotations:
+          summary: "Redis is down"
+          description: "Redis has been down for more than 30 seconds"
+
+      - alert: RedisHighMemoryUsage
+        expr: redis_memory_used_bytes / redis_memory_max_bytes * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+          service: redis
+        annotations:
+          summary: "Redis high memory usage"
+          description: "Redis memory usage is {{ $value }}% for more than 5 minutes"
+
+      - alert: RedisHighConnections
+        expr: redis_connected_clients > 100
+        for: 5m
+        labels:
+          severity: warning
+          service: redis
+        annotations:
+          summary: "Redis high connection count"
+          description: "Redis has {{ $value }} connected clients for more than 5 minutes"
+
+  - name: system.rules
+    rules:
+      # System-level alerts
+      - alert: HighCPUUsage
+        expr: 100 - (avg by (instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 5m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is {{ $value }}% on {{ $labels.instance }} for more than 5 minutes"
+
+      - alert: HighMemoryUsage
+        expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is {{ $value }}% on {{ $labels.instance }} for more than 5 minutes"
+
+      - alert: LowDiskSpace
+        expr: (node_filesystem_size_bytes - node_filesystem_free_bytes) / node_filesystem_size_bytes * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "Low disk space"
+          description: "Disk usage is {{ $value }}% on {{ $labels.instance }}:{{ $labels.mountpoint }}"
+
+      - alert: HighDiskIOUsage
+        expr: rate(node_disk_io_time_seconds_total[5m]) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "High disk I/O usage"
+          description: "Disk I/O usage is {{ $value }}% on {{ $labels.instance }}"
+
+  - name: monitoring.rules
+    rules:
+      # Monitoring infrastructure alerts
+      - alert: PrometheusDown
+        expr: up{job="prometheus"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          service: monitoring
+        annotations:
+          summary: "Prometheus is down"
+          description: "Prometheus has been down for more than 30 seconds"
+
+      - alert: AlertmanagerDown
+        expr: up{job="alertmanager"} == 0
+        for: 30s
+        labels:
+          severity: warning
+          service: monitoring
+        annotations:
+          summary: "Alertmanager is down"
+          description: "Alertmanager has been down for more than 30 seconds"
+
+      - alert: GrafanaDown
+        expr: up{job="grafana"} == 0
+        for: 30s
+        labels:
+          severity: warning
+          service: monitoring
+        annotations:
+          summary: "Grafana is down"
+          description: "Grafana has been down for more than 30 seconds"
+
+      - alert: PrometheusTargetDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: warning
+          service: monitoring
+        annotations:
+          summary: "Prometheus target is down"
+          description: "Target {{ $labels.job }} has been down for more than 1 minute"
+
+      - alert: PrometheusConfigReloadFailed
+        expr: prometheus_config_last_reload_successful != 1
+        for: 0s
+        labels:
+          severity: warning
+          service: monitoring
+        annotations:
+          summary: "Prometheus configuration reload failed"
+          description: "Prometheus configuration reload has failed"
+
+  - name: security.rules
+    rules:
+      # Security-related alerts
+      - alert: HighFailedLogins
+        expr: rate(http_requests_total{status="401"}[5m]) > 10
+        for: 2m
+        labels:
+          severity: warning
+          service: security
+        annotations:
+          summary: "High failed login attempts"
+          description: "High rate of failed login attempts: {{ $value }} per second"
+
+      - alert: SuspiciousIPActivity
+        expr: count by (client_ip) (rate(http_requests_total[5m])) > 100
+        for: 1m
+        labels:
+          severity: warning
+          service: security
+        annotations:
+          summary: "Suspicious IP activity"
+          description: "High request rate from IP {{ $labels.client_ip }}: {{ $value }} requests/second"
+
+      - alert: TLSCertificateExpiringSoon
+        expr: (tls_certificate_expiry_seconds - time()) / 86400 < 7
+        for: 0s
+        labels:
+          severity: warning
+          service: security
+        annotations:
+          summary: "TLS certificate expiring soon"
+          description: "TLS certificate for {{ $labels.instance }} expires in {{ $value }} days"

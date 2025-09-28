@@ -1,0 +1,558 @@
+# Production Docker Compose setup for rwwwrse reverse proxy
+# This setup includes monitoring, logging, security, and high availability features
+
+version: '3.8'
+
+services:
+  rwwwrse:
+    image: ghcr.io/albedosehen/rwwwrse:latest
+    container_name: rwwwrse-prod
+    ports:
+      - "80:8080"      # HTTP port
+      - "443:8443"     # HTTPS port
+    environment:
+      # Production server configuration
+      RWWWRSE_SERVER_HOST: "0.0.0.0"
+      RWWWRSE_SERVER_PORT: "8080"
+      RWWWRSE_SERVER_HTTPS_PORT: "8443"
+      
+      # Production TLS configuration
+      RWWWRSE_TLS_ENABLED: "true"
+      RWWWRSE_TLS_AUTO_CERT: "true"
+      RWWWRSE_TLS_EMAIL: "${ACME_EMAIL}"
+      RWWWRSE_TLS_DOMAINS: "${DOMAINS}"
+      RWWWRSE_TLS_CACHE_DIR: "/certs"
+      
+      # Production backend routing
+      RWWWRSE_BACKENDS_ROUTES: >
+        {
+          "${PRIMARY_DOMAIN}": {
+            "url": "http://app-primary:8080",
+            "health_path": "/health",
+            "timeout": "30s",
+            "max_idle_conns": 100,
+            "max_idle_per_host": 10,
+            "dial_timeout": "10s"
+          },
+          "api.${PRIMARY_DOMAIN}": {
+            "url": "http://api-server:8080",
+            "health_path": "/health",
+            "timeout": "30s",
+            "max_idle_conns": 200,
+            "max_idle_per_host": 20,
+            "dial_timeout": "10s"
+          },
+          "admin.${PRIMARY_DOMAIN}": {
+            "url": "http://admin-panel:8080",
+            "health_path": "/health",
+            "timeout": "30s",
+            "max_idle_conns": 50,
+            "max_idle_per_host": 5,
+            "dial_timeout": "10s"
+          }
+        }
+      
+      # Production logging
+      RWWWRSE_LOGGING_LEVEL: "info"
+      RWWWRSE_LOGGING_FORMAT: "json"
+      
+      # Production health checks
+      RWWWRSE_HEALTH_ENABLED: "true"
+      RWWWRSE_HEALTH_INTERVAL: "30s"
+      RWWWRSE_HEALTH_TIMEOUT: "10s"
+      RWWWRSE_HEALTH_UNHEALTHY_THRESHOLD: "3"
+      RWWWRSE_HEALTH_HEALTHY_THRESHOLD: "2"
+      
+      # Production metrics
+      RWWWRSE_METRICS_ENABLED: "true"
+      RWWWRSE_METRICS_PORT: "9090"
+      RWWWRSE_METRICS_PATH: "/metrics"
+      
+      # Production security
+      RWWWRSE_SECURITY_RATE_LIMIT_ENABLED: "true"
+      RWWWRSE_SECURITY_RATE_LIMIT_REQUESTS_PER_SECOND: "100"
+      RWWWRSE_SECURITY_RATE_LIMIT_BURST_SIZE: "200"
+      RWWWRSE_SECURITY_CORS_ENABLED: "true"
+      RWWWRSE_SECURITY_CORS_ORIGINS: "https://${PRIMARY_DOMAIN},https://api.${PRIMARY_DOMAIN}"
+      RWWWRSE_SECURITY_HSTS_ENABLED: "true"
+      RWWWRSE_SECURITY_FRAME_OPTIONS: "DENY"
+      
+    volumes:
+      - rwwwrse_certs:/certs
+      - rwwwrse_logs:/var/log/rwwwrse
+    depends_on:
+      - app-primary
+      - api-server
+      - admin-panel
+    networks:
+      - frontend
+      - monitoring
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: "fluentd:24224"
+        tag: "rwwwrse.production"
+    labels:
+      - "prometheus.io/scrape=true"
+      - "prometheus.io/port=9090"
+      - "prometheus.io/path=/metrics"
+
+  # Primary Application Server
+  app-primary:
+    image: ${APP_IMAGE}:${APP_VERSION}
+    container_name: app-primary
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@postgres-primary:5432/${DB_NAME}
+      - REDIS_URL=redis://redis-primary:6379
+      - LOG_LEVEL=info
+    volumes:
+      - app_data:/app/data
+      - app_logs:/app/logs
+    depends_on:
+      - postgres-primary
+      - redis-primary
+    networks:
+      - frontend
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: "fluentd:24224"
+        tag: "app.production"
+
+  # API Server
+  api-server:
+    image: ${API_IMAGE}:${API_VERSION}
+    container_name: api-server
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@postgres-primary:5432/${DB_NAME}
+      - REDIS_URL=redis://redis-primary:6379
+      - JWT_SECRET=${JWT_SECRET}
+      - API_RATE_LIMIT=1000
+      - LOG_LEVEL=info
+    volumes:
+      - api_logs:/app/logs
+    depends_on:
+      - postgres-primary
+      - redis-primary
+    networks:
+      - frontend
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: "fluentd:24224"
+        tag: "api.production"
+
+  # Admin Panel
+  admin-panel:
+    image: ${ADMIN_IMAGE}:${ADMIN_VERSION}
+    container_name: admin-panel
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@postgres-primary:5432/${DB_NAME}
+      - ADMIN_SECRET=${ADMIN_SECRET}
+      - SESSION_SECRET=${SESSION_SECRET}
+    volumes:
+      - admin_logs:/app/logs
+    depends_on:
+      - postgres-primary
+    networks:
+      - frontend
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: "fluentd:24224"
+        tag: "admin.production"
+
+  # PostgreSQL Primary Database
+  postgres-primary:
+    image: postgres:15-alpine
+    container_name: postgres-primary
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - postgres_logs:/var/log/postgresql
+      - ./database/init-prod.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./database/backup:/backup
+    ports:
+      - "127.0.0.1:5432:5432"  # Only accessible from localhost for backups
+    networks:
+      - backend
+      - monitoring
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: "fluentd:24224"
+        tag: "postgres.production"
+    labels:
+      - "prometheus.io/scrape=true"
+      - "prometheus.io/port=9187"
+
+  # PostgreSQL Standby (Read Replica)
+  postgres-standby:
+    image: postgres:15-alpine
+    container_name: postgres-standby
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      PGUSER: ${DB_USER}
+    volumes:
+      - postgres_standby_data:/var/lib/postgresql/data
+      - ./database/setup-replica.sh:/docker-entrypoint-initdb.d/setup-replica.sh:ro
+    depends_on:
+      - postgres-primary
+    networks:
+      - backend
+      - monitoring
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: "fluentd:24224"
+        tag: "postgres-standby.production"
+
+  # Redis Primary
+  redis-primary:
+    image: redis:7-alpine
+    container_name: redis-primary
+    command: redis-server /usr/local/etc/redis/redis.conf
+    volumes:
+      - redis_data:/data
+      - ./redis/redis-prod.conf:/usr/local/etc/redis/redis.conf:ro
+      - redis_logs:/var/log/redis
+    ports:
+      - "127.0.0.1:6379:6379"  # Only accessible from localhost
+    networks:
+      - backend
+      - monitoring
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: "fluentd:24224"
+        tag: "redis.production"
+    labels:
+      - "prometheus.io/scrape=true"
+      - "prometheus.io/port=9121"
+
+  # Prometheus Monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus-prod
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"  # Only accessible from localhost
+    networks:
+      - monitoring
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Grafana Dashboard
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana-prod
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:3000:3000"  # Only accessible from localhost
+    depends_on:
+      - prometheus
+    networks:
+      - monitoring
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Alertmanager
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: alertmanager-prod
+    command:
+      - '--config.file=/etc/alertmanager/config.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=http://localhost:9093'
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/config.yml:ro
+      - alertmanager_data:/alertmanager
+    ports:
+      - "127.0.0.1:9093:9093"  # Only accessible from localhost
+    networks:
+      - monitoring
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9093/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Fluentd Log Aggregator
+  fluentd:
+    image: fluent/fluentd:latest
+    container_name: fluentd-prod
+    volumes:
+      - ./logging/fluentd.conf:/fluentd/etc/fluent.conf:ro
+      - fluentd_logs:/fluentd/log
+    ports:
+      - "24224:24224"
+      - "24224:24224/udp"
+    networks:
+      - monitoring
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:24220/api/plugins.json"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Elasticsearch for Log Storage
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.5.0
+    container_name: elasticsearch-prod
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    networks:
+      - monitoring
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Kibana for Log Visualization
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.5.0
+    container_name: kibana-prod
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "127.0.0.1:5601:5601"  # Only accessible from localhost
+    depends_on:
+      - elasticsearch
+    networks:
+      - monitoring
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5601/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Node Exporter for System Metrics
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter-prod
+    command:
+      - '--path.rootfs=/host'
+    volumes:
+      - '/:/host:ro,rslave'
+    pid: host
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  # PostgreSQL Exporter
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: postgres-exporter-prod
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${DB_USER}:${DB_PASSWORD}@postgres-primary:5432/${DB_NAME}?sslmode=disable"
+    depends_on:
+      - postgres-primary
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  # Redis Exporter
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: redis-exporter-prod
+    environment:
+      REDIS_ADDR: "redis://redis-primary:6379"
+    depends_on:
+      - redis-primary
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  # Backup Service
+  backup-service:
+    image: alpine:latest
+    container_name: backup-service-prod
+    volumes:
+      - postgres_data:/backup/postgres:ro
+      - redis_data:/backup/redis:ro
+      - rwwwrse_certs:/backup/certs:ro
+      - ./backup/scripts:/scripts:ro
+      - backup_storage:/backup/storage
+    environment:
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${DB_NAME}
+      - BACKUP_RETENTION_DAYS=30
+      - S3_BUCKET=${BACKUP_S3_BUCKET}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+    depends_on:
+      - postgres-primary
+      - redis-primary
+    networks:
+      - backend
+    restart: unless-stopped
+    command: ["/scripts/backup-cron.sh"]
+
+volumes:
+  rwwwrse_certs:
+    name: rwwwrse_prod_certs
+  rwwwrse_logs:
+    name: rwwwrse_prod_logs
+  app_data:
+    name: rwwwrse_prod_app_data
+  app_logs:
+    name: rwwwrse_prod_app_logs
+  api_logs:
+    name: rwwwrse_prod_api_logs
+  admin_logs:
+    name: rwwwrse_prod_admin_logs
+  postgres_data:
+    name: rwwwrse_prod_postgres_data
+  postgres_standby_data:
+    name: rwwwrse_prod_postgres_standby_data
+  postgres_logs:
+    name: rwwwrse_prod_postgres_logs
+  redis_data:
+    name: rwwwrse_prod_redis_data
+  redis_logs:
+    name: rwwwrse_prod_redis_logs
+  prometheus_data:
+    name: rwwwrse_prod_prometheus_data
+  grafana_data:
+    name: rwwwrse_prod_grafana_data
+  alertmanager_data:
+    name: rwwwrse_prod_alertmanager_data
+  fluentd_logs:
+    name: rwwwrse_prod_fluentd_logs
+  elasticsearch_data:
+    name: rwwwrse_prod_elasticsearch_data
+  backup_storage:
+    name: rwwwrse_prod_backup_storage
+
+networks:
+  frontend:
+    driver: bridge
+    name: rwwwrse-prod-frontend
+    labels:
+      - "environment=production"
+      - "network.type=frontend"
+  
+  backend:
+    driver: bridge
+    name: rwwwrse-prod-backend
+    internal: true
+    labels:
+      - "environment=production"
+      - "network.type=backend"
+  
+  monitoring:
+    driver: bridge
+    name: rwwwrse-prod-monitoring
+    internal: true
+    labels:
+      - "environment=production"
+      - "network.type=monitoring"

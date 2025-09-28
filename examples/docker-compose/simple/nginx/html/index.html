@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>rwwwrse Simple Example</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            line-height: 1.6;
+            color: #333;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 10px;
+        }
+        .info-box {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .endpoint {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        .status {
+            display: inline-block;
+            padding: 4px 8px;
+            background: #4caf50;
+            color: white;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+        code {
+            background: #f1f3f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Monaco', 'Consolas', monospace;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+            color: #666;
+        }
+        .test-section {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .next-steps {
+            background: #d1ecf1;
+            border: 1px solid #bee5eb;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🚀 rwwwrse Reverse Proxy</h1>
+        <p>Simple Docker Compose Example</p>
+        <span class="status">✓ RUNNING</span>
+    </div>
+
+    <div class="info-box">
+        <h2>🎯 Success!</h2>
+        <p>You are successfully accessing the nginx backend through the rwwwrse reverse proxy. This means the proxy is correctly:</p>
+        <ul>
+            <li>✅ Routing requests based on the Host header</li>
+            <li>✅ Forwarding to the configured backend service</li>
+            <li>✅ Handling HTTP responses properly</li>
+            <li>✅ Maintaining connection state</li>
+        </ul>
+    </div>
+
+    <div class="test-section">
+        <h2>🧪 Available Endpoints</h2>
+        <p>Try these endpoints to test different aspects of the proxy:</p>
+        
+        <div class="endpoint">
+            <strong>Main Page:</strong> <code>curl http://localhost:8080/</code><br>
+            <small>This page - confirms basic routing works</small>
+        </div>
+        
+        <div class="endpoint">
+            <strong>Health Check:</strong> <code>curl http://localhost:8080/health</code><br>
+            <small>Overall proxy health status</small>
+        </div>
+        
+        <div class="endpoint">
+            <strong>Backend Health:</strong> <code>curl http://localhost:8080/status</code><br>
+            <small>Backend service health status</small>
+        </div>
+        
+        <div class="endpoint">
+            <strong>Metrics:</strong> <code>curl http://localhost:9090/metrics</code><br>
+            <small>Prometheus metrics from the proxy</small>
+        </div>
+    </div>
+
+    <div class="info-box">
+        <h2>🔧 Configuration Details</h2>
+        <p><strong>Current Setup:</strong></p>
+        <ul>
+            <li><strong>Proxy:</strong> rwwwrse running on ports 8080 (HTTP) and 8443 (HTTPS)</li>
+            <li><strong>Backend:</strong> nginx serving static content</li>
+            <li><strong>Routing:</strong> <code>localhost</code> → <code>http://nginx-backend:80</code></li>
+            <li><strong>TLS:</strong> Disabled for local development</li>
+            <li><strong>Metrics:</strong> Available on port 9090</li>
+        </ul>
+    </div>
+
+    <div class="next-steps">
+        <h2>📚 Next Steps</h2>
+        <p>Ready to explore more? Try these examples:</p>
+        <ul>
+            <li><strong>Microservices:</strong> <code>../microservices/</code> - Multiple backend services</li>
+            <li><strong>Development:</strong> <code>../development/</code> - Local development environment</li>
+            <li><strong>Production:</strong> <code>../production/</code> - Production-ready setup with monitoring</li>
+            <li><strong>Kubernetes:</strong> <code>../../kubernetes/</code> - Container orchestration examples</li>
+        </ul>
+    </div>
+
+    <div class="info-box">
+        <h2>🛠️ Customization Tips</h2>
+        <p>Want to customize this example?</p>
+        <ul>
+            <li>Edit <code>docker-compose.yml</code> to change configuration</li>
+            <li>Modify <code>nginx/html/index.html</code> to customize this page</li>
+            <li>Update <code>nginx/default.conf</code> to change backend behavior</li>
+            <li>Add environment variables in <code>.env</code> file</li>
+        </ul>
+    </div>
+
+    <div class="footer">
+        <p>
+            <strong>rwwwrse</strong> - Modern Go Reverse Proxy Server<br>
+            <small>Serving requests through nginx backend via Docker Compose</small>
+        </p>
+        <p>
+            <a href="https://github.com/albedosehen/rwwwrse" target="_blank">📖 Documentation</a> |
+            <a href="https://github.com/albedosehen/rwwwrse/issues" target="_blank">🐛 Issues</a> |
+            <a href="https://github.com/albedosehen/rwwwrse/examples" target="_blank">📋 More Examples</a>
+        </p>
+    </div>
+
+    <script>
+        // Add some dynamic information
+        document.addEventListener('DOMContentLoaded', function() {
+            // Display current time
+            const now = new Date();
+            const timeElement = document.createElement('p');
+            timeElement.innerHTML = '<small>Page loaded at: ' + now.toLocaleString() + '</small>';
+            document.querySelector('.footer').appendChild(timeElement);
+            
+            // Add request headers info if available
+            const userAgent = navigator.userAgent;
+            const infoElement = document.createElement('div');
+            infoElement.className = 'info-box';
+            infoElement.innerHTML = '<h3>🌐 Request Info</h3><p><strong>User Agent:</strong> <code>' + userAgent + '</code></p>';
+            document.querySelector('.footer').parentNode.insertBefore(infoElement, document.querySelector('.footer'));
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Microservices Dashboard - rwwwrse</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+            min-height: 100vh;
+            padding: 2rem;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+        .logo {
+            font-size: 3rem;
+            margin-bottom: 0.5rem;
+        }
+        .subtitle {
+            opacity: 0.8;
+            font-size: 1.2rem;
+        }
+        .services-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            margin-bottom: 3rem;
+        }
+        .service-card {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 2rem;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        .service-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
+        }
+        .service-icon {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+        }
+        .service-title {
+            font-size: 1.5rem;
+            margin-bottom: 0.5rem;
+        }
+        .service-description {
+            opacity: 0.8;
+            margin-bottom: 1rem;
+            line-height: 1.5;
+        }
+        .service-status {
+            display: flex;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 0.5rem;
+            animation: pulse 2s infinite;
+        }
+        .status-online { background: #4CAF50; }
+        .status-offline { background: #f44336; }
+        .status-warning { background: #FF9800; }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        .service-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+        .btn {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .btn-primary {
+            background: #4CAF50;
+            color: white;
+        }
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            opacity: 0.9;
+        }
+        .infrastructure {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }
+        .infrastructure h3 {
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+        }
+        .infrastructure-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+        .infra-item {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 1rem;
+            border-radius: 10px;
+            text-align: center;
+        }
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-top: 2rem;
+        }
+        .metric-card {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 1.5rem;
+            border-radius: 10px;
+            text-align: center;
+        }
+        .metric-value {
+            font-size: 2rem;
+            font-weight: bold;
+            margin-bottom: 0.5rem;
+        }
+        .metric-label {
+            opacity: 0.8;
+            font-size: 0.9rem;
+        }
+        .architecture-diagram {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            padding: 2rem;
+            margin: 2rem 0;
+            text-align: center;
+        }
+        .diagram-container {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            padding: 2rem;
+            margin: 1rem 0;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">🏗️ rwwwrse</div>
+            <h1>Microservices Architecture</h1>
+            <p class="subtitle">Distributed system with multiple backend services</p>
+        </div>
+
+        <div class="services-grid">
+            <div class="service-card">
+                <div class="service-icon">🌐</div>
+                <h3 class="service-title">Web Frontend</h3>
+                <p class="service-description">React/Vue.js application serving the user interface and static assets</p>
+                <div class="service-status">
+                    <div class="status-indicator status-online" id="web-status"></div>
+                    <span>Online - web.example.com</span>
+                </div>
+                <div class="service-actions">
+                    <button class="btn btn-primary" onclick="testService('web')">Test Service</button>
+                    <button class="btn btn-secondary" onclick="viewLogs('web')">View Logs</button>
+                </div>
+            </div>
+
+            <div class="service-card">
+                <div class="service-icon">🔐</div>
+                <h3 class="service-title">Authentication</h3>
+                <p class="service-description">User authentication, authorization, and session management service</p>
+                <div class="service-status">
+                    <div class="status-indicator status-online" id="auth-status"></div>
+                    <span>Online - auth.example.com</span>
+                </div>
+                <div class="service-actions">
+                    <a href="http://auth.example.com" class="btn btn-primary">Open Auth</a>
+                    <button class="btn btn-secondary" onclick="testService('auth')">Test API</button>
+                </div>
+            </div>
+
+            <div class="service-card">
+                <div class="service-icon">⚡</div>
+                <h3 class="service-title">API Gateway</h3>
+                <p class="service-description">RESTful API service handling business logic and data operations</p>
+                <div class="service-status">
+                    <div class="status-indicator status-online" id="api-status"></div>
+                    <span>Online - api.example.com</span>
+                </div>
+                <div class="service-actions">
+                    <a href="http://api.example.com" class="btn btn-primary">Open API</a>
+                    <button class="btn btn-secondary" onclick="testService('api')">Test Endpoints</button>
+                </div>
+            </div>
+
+            <div class="service-card">
+                <div class="service-icon">🛠️</div>
+                <h3 class="service-title">Admin Panel</h3>
+                <p class="service-description">Administrative interface for system management and monitoring</p>
+                <div class="service-status">
+                    <div class="status-indicator status-online" id="admin-status"></div>
+                    <span>Online - admin.example.com</span>
+                </div>
+                <div class="service-actions">
+                    <a href="http://admin.example.com" class="btn btn-primary">Open Admin</a>
+                    <button class="btn btn-secondary" onclick="viewMetrics()">View Metrics</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="infrastructure">
+            <h3>🏗️ Infrastructure Components</h3>
+            <div class="infrastructure-grid">
+                <div class="infra-item">
+                    <div style="font-size: 2rem;">🐘</div>
+                    <h4>PostgreSQL</h4>
+                    <p>Primary database</p>
+                    <div class="service-status">
+                        <div class="status-indicator status-online"></div>
+                        <span>Online</span>
+                    </div>
+                </div>
+                <div class="infra-item">
+                    <div style="font-size: 2rem;">🔴</div>
+                    <h4>Redis</h4>
+                    <p>Cache & sessions</p>
+                    <div class="service-status">
+                        <div class="status-indicator status-online"></div>
+                        <span>Online</span>
+                    </div>
+                </div>
+                <div class="infra-item">
+                    <div style="font-size: 2rem;">🐰</div>
+                    <h4>RabbitMQ</h4>
+                    <p>Message queue</p>
+                    <div class="service-status">
+                        <div class="status-indicator status-online"></div>
+                        <span>Online</span>
+                    </div>
+                </div>
+                <div class="infra-item">
+                    <div style="font-size: 2rem;">📊</div>
+                    <h4>rwwwrse Proxy</h4>
+                    <p>Reverse proxy</p>
+                    <div class="service-status">
+                        <div class="status-indicator status-online"></div>
+                        <span>Online</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="architecture-diagram">
+            <h3>📊 System Architecture</h3>
+            <div class="diagram-container">
+                <pre>
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   Web Browser   │───▶│   rwwwrse Proxy  │───▶│  Microservices  │
+└─────────────────┘    │  (Load Balancer) │    └─────────────────┘
+                       └──────────────────┘              │
+                                │                        │
+                                ▼                        ▼
+    ┌─────────────────────────────────────────────────────────────┐
+    │                    Service Mesh                             │
+    │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌────────┐ │
+    │  │     Web     │ │    Auth     │ │     API     │ │ Admin  │ │
+    │  │  Frontend   │ │   Service   │ │   Gateway   │ │ Panel  │ │
+    │  └─────────────┘ └─────────────┘ └─────────────┘ └────────┘ │
+    └─────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+    ┌─────────────────────────────────────────────────────────────┐
+    │                 Infrastructure Layer                        │
+    │  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────────┐ │
+    │  │ PostgreSQL  │ │    Redis    │ │       RabbitMQ          │ │
+    │  │  Database   │ │    Cache    │ │   Message Queue         │ │
+    │  └─────────────┘ └─────────────┘ └─────────────────────────┘ │
+    └─────────────────────────────────────────────────────────────┘
+                </pre>
+            </div>
+        </div>
+
+        <div class="metrics">
+            <div class="metric-card">
+                <div class="metric-value" id="request-count">0</div>
+                <div class="metric-label">Total Requests</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value" id="response-time">45ms</div>
+                <div class="metric-label">Avg Response Time</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value" id="active-connections">12</div>
+                <div class="metric-label">Active Connections</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value" id="uptime">99.9%</div>
+                <div class="metric-label">System Uptime</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Simulate real-time metrics
+        function updateMetrics() {
+            document.getElementById('request-count').textContent = 
+                Math.floor(Math.random() * 10000) + 1000;
+            document.getElementById('response-time').textContent = 
+                Math.floor(Math.random() * 100) + 20 + 'ms';
+            document.getElementById('active-connections').textContent = 
+                Math.floor(Math.random() * 50) + 10;
+        }
+
+        function testService(service) {
+            alert(`Testing ${service} service...\n\nThis would perform health checks and connectivity tests in a real implementation.`);
+        }
+
+        function viewLogs(service) {
+            alert(`Opening logs for ${service} service...\n\nIn production, this would connect to your logging system (ELK, Splunk, etc.).`);
+        }
+
+        function viewMetrics() {
+            alert(`Opening metrics dashboard...\n\nThis would connect to Prometheus/Grafana or your monitoring solution.`);
+        }
+
+        // Health check simulation
+        function checkServiceHealth() {
+            const services = ['web', 'auth', 'api', 'admin'];
+            services.forEach(service => {
+                // Simulate health check - in real implementation, this would be actual API calls
+                const isHealthy = Math.random() > 0.1; // 90% chance of being healthy
+                const statusElement = document.getElementById(`${service}-status`);
+                if (statusElement) {
+                    statusElement.className = `status-indicator ${isHealthy ? 'status-online' : 'status-offline'}`;
+                }
+            });
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            updateMetrics();
+            checkServiceHealth();
+            
+            // Update metrics every 5 seconds
+            setInterval(updateMetrics, 5000);
+            
+            // Check health every 30 seconds
+            setInterval(checkServiceHealth, 30000);
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,403 @@
+# rwwwrse Deployment for AWS EKS
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rwwwrse
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: proxy
+    version: latest
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/rwwwrse-service-role
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: rwwwrse
+  template:
+    metadata:
+      labels:
+        app: rwwwrse
+        component: proxy
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "true"
+    spec:
+      serviceAccountName: rwwwrse-service-account
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+      containers:
+      - name: rwwwrse
+        image: YOUR_ACCOUNT.dkr.ecr.us-west-2.amazonaws.com/rwwwrse:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 9090
+          name: metrics
+          protocol: TCP
+        env:
+        - name: RWWWRSE_LOG_LEVEL
+          value: "info"
+        - name: RWWWRSE_LOG_FORMAT
+          value: "json"
+        - name: RWWWRSE_METRICS_ENABLED
+          value: "true"
+        - name: RWWWRSE_METRICS_PORT
+          value: "9090"
+        - name: RWWWRSE_TLS_AUTO
+          value: "true"
+        - name: RWWWRSE_TLS_EMAIL
+          valueFrom:
+            secretKeyRef:
+              name: rwwwrse-secrets
+              key: tls-email
+        - name: RWWWRSE_RATE_LIMIT
+          value: "1000"
+        - name: RWWWRSE_TIMEOUT
+          value: "30s"
+        - name: RWWWRSE_CONFIG_FILE
+          value: "/etc/rwwwrse/routes.yaml"
+        - name: AWS_REGION
+          value: "us-west-2"
+        - name: AWS_LOAD_BALANCER_TYPE
+          value: "nlb"
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/rwwwrse
+          readOnly: true
+        - name: tls-volume
+          mountPath: /etc/tls
+          readOnly: true
+        - name: tmp-volume
+          mountPath: /tmp
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 2
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65534
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: config-volume
+        configMap:
+          name: rwwwrse-config
+          items:
+          - key: routes.yaml
+            path: routes.yaml
+      - name: tls-volume
+        secret:
+          secretName: rwwwrse-tls
+          optional: true
+      - name: tmp-volume
+        emptyDir: {}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - rwwwrse
+              topologyKey: kubernetes.io/hostname
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: eks.amazonaws.com/nodegroup
+                operator: In
+                values:
+                - rwwwrse-nodegroup
+      tolerations:
+      - key: "rwwwrse-dedicated"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      terminationGracePeriodSeconds: 30
+
+---
+# rwwwrse Service (LoadBalancer with NLB)
+apiVersion: v1
+kind: Service
+metadata:
+  name: rwwwrse
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: proxy
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "tcp"
+    service.beta.kubernetes.io/aws-load-balancer-connection-idle-timeout: "60"
+    service.beta.kubernetes.io/aws-load-balancer-ssl-cert: arn:aws:acm:us-west-2:ACCOUNT_ID:certificate/CERTIFICATE_ID
+    service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "443"
+    external-dns.alpha.kubernetes.io/hostname: rwwwrse.your-domain.com
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  - port: 443
+    targetPort: 8080
+    protocol: TCP
+    name: https
+  selector:
+    app: rwwwrse
+
+---
+# Internal Service for metrics
+apiVersion: v1
+kind: Service
+metadata:
+  name: rwwwrse-metrics
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: metrics
+spec:
+  type: ClusterIP
+  ports:
+  - port: 9090
+    targetPort: 9090
+    protocol: TCP
+    name: metrics
+  selector:
+    app: rwwwrse
+
+---
+# HorizontalPodAutoscaler
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: rwwwrse-hpa
+  namespace: rwwwrse
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: rwwwrse
+  minReplicas: 3
+  maxReplicas: 50
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+
+---
+# PodDisruptionBudget
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rwwwrse-pdb
+  namespace: rwwwrse
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: rwwwrse
+
+---
+# ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rwwwrse-service-account
+  namespace: rwwwrse
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/rwwwrse-service-role
+automountServiceAccountToken: true
+
+---
+# ClusterRole for service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: rwwwrse-cluster-role
+rules:
+- apiGroups: [""]
+  resources: ["services", "endpoints"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["get", "list", "watch"]
+
+---
+# ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: rwwwrse-cluster-role-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: rwwwrse-cluster-role
+subjects:
+- kind: ServiceAccount
+  name: rwwwrse-service-account
+  namespace: rwwwrse
+
+---
+# Sample Application Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-app
+  namespace: rwwwrse
+  labels:
+    app: sample-app
+    component: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sample-app
+  template:
+    metadata:
+      labels:
+        app: sample-app
+        component: backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: app
+        image: nginx:alpine
+        ports:
+        - containerPort: 8080
+          name: http
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65534
+
+---
+# Sample Application Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: sample-app
+  namespace: rwwwrse
+  labels:
+    app: sample-app
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: sample-app
+
+---
+# Sample Application HPA
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sample-app-hpa
+  namespace: rwwwrse
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sample-app
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70

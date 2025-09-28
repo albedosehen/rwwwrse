@@ -1,0 +1,162 @@
+# rwwwrse Deployment with Doppler Secrets Management
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rwwwrse
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: proxy
+    version: latest
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: rwwwrse
+  template:
+    metadata:
+      labels:
+        app: rwwwrse
+        component: proxy
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Define an init container to fetch secrets from Doppler
+      initContainers:
+      - name: doppler-secrets
+        image: ghcr.io/albedosehen/rwwwrse:latest
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          # Fetch secrets from Doppler and write them to a file
+          doppler secrets download --format env-no-quotes > /etc/secrets/doppler-secrets.env
+          echo "Doppler secrets fetched successfully"
+        env:
+        - name: DOPPLER_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: doppler-token
+              key: token
+        volumeMounts:
+        - name: doppler-secrets
+          mountPath: /etc/secrets
+      containers:
+      - name: rwwwrse
+        image: ghcr.io/albedosehen/rwwwrse:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 9090
+          name: metrics
+          protocol: TCP
+        # Load environment variables from Doppler secrets
+        envFrom:
+        - configMapRef:
+            name: rwwwrse-config
+        # Load secrets from the Doppler secrets file
+        - secretRef:
+            name: doppler-secrets
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/rwwwrse
+          readOnly: true
+        - name: tls-volume
+          mountPath: /etc/tls
+          readOnly: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 2
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: config-volume
+        configMap:
+          name: rwwwrse-config
+          items:
+          - key: routes.yaml
+            path: routes.yaml
+      - name: tls-volume
+        secret:
+          secretName: rwwwrse-tls
+          optional: true
+      # Volume for sharing Doppler secrets between init container and main container
+      - name: doppler-secrets
+        emptyDir: {}
+      securityContext:
+        fsGroup: 1000
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+
+---
+# Secret to store the Doppler token
+apiVersion: v1
+kind: Secret
+metadata:
+  name: doppler-token
+  namespace: rwwwrse
+type: Opaque
+data:
+  # This is a placeholder and should be replaced with a real Doppler token
+  # The value needs to be base64 encoded: echo -n "your-doppler-token" | base64
+  token: ZHA6c3QuZHVtbXkudG9rZW4=  # This is just a placeholder
+
+---
+# Service definition for rwwwrse
+apiVersion: v1
+kind: Service
+metadata:
+  name: rwwwrse
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: proxy
+spec:
+  type: NodePort
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+    name: http
+    nodePort: 30080
+  - port: 9090
+    targetPort: 9090
+    protocol: TCP
+    name: metrics
+    nodePort: 30090
+  selector:
+    app: rwwwrse

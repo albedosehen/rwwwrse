@@ -1,0 +1,390 @@
+# ConfigMap for rwwwrse on AWS EKS
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rwwwrse-config
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: config
+  annotations:
+    eks.amazonaws.com/cluster-name: rwwwrse-cluster
+data:
+  # rwwwrse core configuration
+  RWWWRSE_LOG_LEVEL: "info"
+  RWWWRSE_LOG_FORMAT: "json"
+  RWWWRSE_METRICS_ENABLED: "true"
+  RWWWRSE_METRICS_PORT: "9090"
+  RWWWRSE_RATE_LIMIT: "1000"
+  RWWWRSE_TIMEOUT: "30s"
+  RWWWRSE_HEALTH_CHECK_PATH: "/health"
+  RWWWRSE_HEALTH_CHECK_INTERVAL: "30s"
+  
+  # TLS configuration for AWS
+  RWWWRSE_TLS_AUTO: "true"
+  RWWWRSE_TLS_EMAIL: ""  # Will be set from secret
+  
+  # CORS configuration for production
+  RWWWRSE_CORS_ENABLED: "true"
+  RWWWRSE_CORS_ORIGINS: "https://your-domain.com,https://www.your-domain.com"
+  RWWWRSE_CORS_METHODS: "GET,POST,PUT,DELETE,OPTIONS"
+  RWWWRSE_CORS_HEADERS: "Content-Type,Authorization,X-Requested-With"
+  
+  # Security headers
+  RWWWRSE_SECURITY_HEADERS_ENABLED: "true"
+  RWWWRSE_HSTS_ENABLED: "true"
+  RWWWRSE_HSTS_MAX_AGE: "31536000"
+  
+  # AWS-specific configuration
+  RWWWRSE_AWS_REGION: "us-west-2"
+  RWWWRSE_AWS_LOAD_BALANCER_TYPE: "nlb"
+  
+  # CloudWatch logging integration
+  RWWWRSE_CLOUDWATCH_ENABLED: "true"
+  RWWWRSE_CLOUDWATCH_LOG_GROUP: "/aws/eks/rwwwrse-cluster/rwwwrse"
+  
+  # Route configuration for production services
+  routes.yaml: |
+    routes:
+      # Main application
+      - host: "app.your-domain.com"
+        target: "http://sample-app:8080"
+        health_check: "/health"
+        timeout: "30s"
+        retry_attempts: 3
+        rate_limit: 100
+        
+      # API service
+      - host: "api.your-domain.com"
+        target: "http://api-service:3000"
+        health_check: "/api/health"
+        timeout: "30s"
+        retry_attempts: 3
+        path_prefix: "/api"
+        rate_limit: 200
+        
+      # Admin panel
+      - host: "admin.your-domain.com"
+        target: "http://admin-service:8080"
+        health_check: "/health"
+        timeout: "30s"
+        retry_attempts: 2
+        rate_limit: 50
+        auth_required: true
+        
+      # Static assets (CDN)
+      - host: "static.your-domain.com"
+        target: "http://static-service:80"
+        health_check: "/health"
+        timeout: "10s"
+        retry_attempts: 2
+        cache_ttl: "1h"
+        
+      # Metrics endpoint (internal only)
+      - host: "metrics.internal.your-domain.com"
+        target: "http://prometheus:9090"
+        health_check: "/-/healthy"
+        timeout: "10s"
+        retry_attempts: 1
+        internal_only: true
+        
+      # Websocket service
+      - host: "ws.your-domain.com"
+        target: "http://websocket-service:8080"
+        health_check: "/health"
+        timeout: "60s"
+        retry_attempts: 1
+        websocket: true
+        
+      # Default fallback
+      - host: "*"
+        target: "http://sample-app:8080"
+        health_check: "/health"
+        timeout: "30s"
+        retry_attempts: 3
+
+---
+# ConfigMap for AWS-specific monitoring
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aws-monitoring-config
+  namespace: rwwwrse
+  labels:
+    app: monitoring
+    component: config
+data:
+  # CloudWatch configuration
+  cloudwatch.yaml: |
+    metrics:
+      namespace: EKS/rwwwrse
+      dimensions:
+        - ClusterName: rwwwrse-cluster
+        - ServiceName: rwwwrse
+        - Environment: production
+      
+      custom_metrics:
+        - name: request_rate
+          unit: Count/Second
+          value: rate(http_requests_total[1m])
+        
+        - name: error_rate
+          unit: Percent
+          value: rate(http_requests_total{status=~"5.."}[1m]) / rate(http_requests_total[1m]) * 100
+        
+        - name: response_time_p95
+          unit: Seconds
+          value: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))
+        
+        - name: active_connections
+          unit: Count
+          value: rwwwrse_active_connections
+    
+    logs:
+      group: /aws/eks/rwwwrse-cluster/rwwwrse
+      retention_days: 30
+      
+      streams:
+        - name: application
+          filter: '{ $.level = "INFO" || $.level = "WARN" || $.level = "ERROR" }'
+        
+        - name: access
+          filter: '{ $.type = "access" }'
+        
+        - name: error
+          filter: '{ $.level = "ERROR" }'
+          alarm:
+            threshold: 10
+            period: 300
+            evaluation_periods: 2
+
+  # X-Ray tracing configuration
+  xray.yaml: |
+    tracing:
+      enabled: true
+      sampling_rate: 0.1
+      
+      service_map:
+        - name: rwwwrse
+          type: proxy
+          
+        - name: sample-app
+          type: service
+          
+        - name: api-service
+          type: service
+          
+        - name: database
+          type: datastore
+
+---
+# ConfigMap for Load Balancer configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: load-balancer-config
+  namespace: rwwwrse
+  labels:
+    app: load-balancer
+    component: config
+data:
+  # NLB configuration
+  nlb.yaml: |
+    load_balancer:
+      type: network
+      scheme: internet-facing
+      
+      listeners:
+        - port: 80
+          protocol: TCP
+          target_port: 8080
+          
+        - port: 443
+          protocol: TLS
+          target_port: 8080
+          ssl_policy: ELBSecurityPolicy-TLS-1-2-2017-01
+          certificate_arn: arn:aws:acm:us-west-2:ACCOUNT_ID:certificate/CERTIFICATE_ID
+      
+      attributes:
+        - key: load_balancing.cross_zone.enabled
+          value: "true"
+        - key: deletion_protection.enabled
+          value: "false"
+        - key: access_logs.s3.enabled
+          value: "true"
+        - key: access_logs.s3.bucket
+          value: "rwwwrse-nlb-logs"
+        - key: access_logs.s3.prefix
+          value: "rwwwrse"
+      
+      target_group:
+        port: 8080
+        protocol: TCP
+        health_check:
+          enabled: true
+          interval_seconds: 30
+          timeout_seconds: 10
+          healthy_threshold_count: 2
+          unhealthy_threshold_count: 2
+          path: "/health"
+
+---
+# ConfigMap for Auto Scaling configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: autoscaling-config
+  namespace: rwwwrse
+  labels:
+    app: autoscaling
+    component: config
+data:
+  # HPA configuration
+  hpa.yaml: |
+    horizontal_pod_autoscaler:
+      min_replicas: 3
+      max_replicas: 50
+      
+      metrics:
+        - type: Resource
+          resource:
+            name: cpu
+            target:
+              type: Utilization
+              average_utilization: 70
+              
+        - type: Resource
+          resource:
+            name: memory
+            target:
+              type: Utilization
+              average_utilization: 80
+              
+        - type: External
+          external:
+            metric:
+              name: sqs_messages_visible
+              selector:
+                matchLabels:
+                  queue_name: rwwwrse-queue
+            target:
+              type: AverageValue
+              average_value: "10"
+      
+      behavior:
+        scale_up:
+          stabilization_window_seconds: 60
+          policies:
+            - type: Percent
+              value: 50
+              period_seconds: 60
+              
+        scale_down:
+          stabilization_window_seconds: 300
+          policies:
+            - type: Percent
+              value: 10
+              period_seconds: 60
+
+  # Cluster Autoscaler configuration
+  cluster_autoscaler.yaml: |
+    cluster_autoscaler:
+      node_groups:
+        - name: rwwwrse-nodegroup
+          min_size: 1
+          max_size: 10
+          desired_capacity: 3
+          instance_types:
+            - m5.large
+            - m5.xlarge
+          
+        - name: rwwwrse-spot-nodegroup
+          min_size: 0
+          max_size: 20
+          desired_capacity: 0
+          instance_types:
+            - m5.large
+            - m5.xlarge
+            - m4.large
+            - m4.xlarge
+          capacity_type: SPOT
+          
+      scale_down:
+        delay_after_add: 10m
+        delay_after_delete: 10s
+        delay_after_failure: 3m
+        unneeded_time: 10m
+        utilization_threshold: 0.5
+
+---
+# ConfigMap for Security configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: security-config
+  namespace: rwwwrse
+  labels:
+    app: security
+    component: config
+data:
+  # Network policy configuration
+  network_policy.yaml: |
+    network_policies:
+      - name: deny-all-ingress
+        spec:
+          podSelector: {}
+          policyTypes:
+            - Ingress
+            
+      - name: allow-rwwwrse-ingress
+        spec:
+          podSelector:
+            matchLabels:
+              app: rwwwrse
+          policyTypes:
+            - Ingress
+          ingress:
+            - from:
+                - namespaceSelector:
+                    matchLabels:
+                      name: kube-system
+              ports:
+                - protocol: TCP
+                  port: 8080
+                - protocol: TCP
+                  port: 9090
+
+  # Pod security standards
+  pod_security.yaml: |
+    pod_security:
+      enforce: restricted
+      audit: restricted
+      warn: restricted
+      
+      exemptions:
+        usernames: []
+        runtimeClasses: []
+        namespaces:
+          - kube-system
+          - kube-public
+          - kube-node-lease
+
+  # RBAC configuration
+  rbac.yaml: |
+    rbac:
+      service_accounts:
+        - name: rwwwrse-service-account
+          namespace: rwwwrse
+          
+      cluster_roles:
+        - name: rwwwrse-cluster-role
+          rules:
+            - apiGroups: [""]
+              resources: ["services", "endpoints", "pods"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: ["apps"]
+              resources: ["deployments", "replicasets"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: ["networking.k8s.io"]
+              resources: ["ingresses", "networkpolicies"]
+              verbs: ["get", "list", "watch"]

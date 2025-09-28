@@ -1,0 +1,492 @@
+# GCP GKE Configuration for rwwwrse
+# This file configures rwwwrse for deployment on Google Kubernetes Engine with GCP-specific integrations
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rwwwrse-config
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: config
+    version: v1.0.0
+    environment: gke-production
+    managed-by: kubectl
+  annotations:
+    kubernetes.io/description: "rwwwrse configuration for GKE deployment"
+    config.kubernetes.io/local-config: "true"
+data:
+  # Server Configuration
+  RWWWRSE_PORT: "8080"
+  RWWWRSE_HOST: "0.0.0.0"
+  RWWWRSE_READ_TIMEOUT: "30s"
+  RWWWRSE_WRITE_TIMEOUT: "30s"
+  RWWWRSE_IDLE_TIMEOUT: "120s"
+  RWWWRSE_MAX_HEADER_BYTES: "1048576"
+  RWWWRSE_GRACEFUL_TIMEOUT: "30s"
+
+  # TLS Configuration
+  RWWWRSE_TLS_ENABLED: "true"
+  RWWWRSE_TLS_AUTO_CERT: "true"
+  RWWWRSE_TLS_CERT_DIR: "/tmp/certs"
+  RWWWRSE_TLS_HOST_POLICY: "whitelist"
+  # Updated with your actual domains
+  RWWWRSE_TLS_HOSTS: "api.example.com,app.example.com,web.example.com"
+  RWWWRSE_TLS_EMAIL: "admin@example.com"
+  
+  # Logging Configuration - Enhanced for Cloud Logging
+  RWWWRSE_LOG_LEVEL: "info"
+  RWWWRSE_LOG_FORMAT: "json"
+  RWWWRSE_LOG_OUTPUT: "stdout"
+  RWWWRSE_LOG_TIMESTAMP: "true"
+  RWWWRSE_LOG_CALLER: "false"
+  RWWWRSE_ACCESS_LOG_ENABLED: "true"
+  RWWWRSE_ACCESS_LOG_FORMAT: "json"
+
+  # Health Check Configuration
+  RWWWRSE_HEALTH_ENABLED: "true"
+  RWWWRSE_HEALTH_PATH: "/health"
+  RWWWRSE_HEALTH_INTERVAL: "30s"
+  RWWWRSE_HEALTH_TIMEOUT: "10s"
+  
+  # Metrics Configuration - Cloud Monitoring Integration
+  RWWWRSE_METRICS_ENABLED: "true"
+  RWWWRSE_METRICS_PATH: "/metrics"
+  RWWWRSE_METRICS_NAMESPACE: "rwwwrse"
+  RWWWRSE_METRICS_SUBSYSTEM: "proxy"
+
+  # Rate Limiting Configuration
+  RWWWRSE_RATE_LIMIT_ENABLED: "true"
+  RWWWRSE_RATE_LIMIT_REQUESTS: "1000"
+  RWWWRSE_RATE_LIMIT_WINDOW: "1m"
+  RWWWRSE_RATE_LIMIT_BURST: "100"
+  
+  # CORS Configuration
+  RWWWRSE_CORS_ENABLED: "true"
+  RWWWRSE_CORS_ALLOWED_ORIGINS: "https://app.example.com,https://web.example.com,https://admin.example.com"
+  RWWWRSE_CORS_ALLOWED_METHODS: "GET,POST,PUT,DELETE,OPTIONS,PATCH"
+  RWWWRSE_CORS_ALLOWED_HEADERS: "Origin,Content-Type,Accept,Authorization,X-Requested-With,X-Request-ID"
+  RWWWRSE_CORS_ALLOW_CREDENTIALS: "true"
+  RWWWRSE_CORS_MAX_AGE: "86400"
+
+  # Security Headers Configuration
+  RWWWRSE_SECURITY_HEADERS_ENABLED: "true"
+  RWWWRSE_HSTS_ENABLED: "true"
+  RWWWRSE_HSTS_MAX_AGE: "31536000"
+  RWWWRSE_HSTS_INCLUDE_SUBDOMAINS: "true"
+  RWWWRSE_HSTS_PRELOAD: "true"
+  RWWWRSE_CONTENT_TYPE_NOSNIFF: "true"
+  RWWWRSE_FRAME_OPTIONS: "DENY"
+  RWWWRSE_XSS_PROTECTION: "1; mode=block"
+  RWWWRSE_REFERRER_POLICY: "strict-origin-when-cross-origin"
+
+  # Compression Configuration
+  RWWWRSE_COMPRESSION_ENABLED: "true"
+  RWWWRSE_COMPRESSION_LEVEL: "6"
+  RWWWRSE_COMPRESSION_MIN_SIZE: "1024"
+  RWWWRSE_COMPRESSION_TYPES: "text/html,text/css,text/javascript,application/javascript,application/json,application/xml,text/xml"
+
+  # Circuit Breaker Configuration
+  RWWWRSE_CIRCUIT_BREAKER_ENABLED: "true"
+  RWWWRSE_CIRCUIT_BREAKER_THRESHOLD: "10"
+  RWWWRSE_CIRCUIT_BREAKER_TIMEOUT: "60s"
+  RWWWRSE_CIRCUIT_BREAKER_MAX_REQUESTS: "5"
+
+  # Load Balancing Configuration
+  RWWWRSE_LB_STRATEGY: "round_robin"
+  RWWWRSE_LB_HEALTH_CHECK_ENABLED: "true"
+  RWWWRSE_LB_HEALTH_CHECK_INTERVAL: "30s"
+  RWWWRSE_LB_HEALTH_CHECK_TIMEOUT: "10s"
+  RWWWRSE_LB_HEALTH_CHECK_PATH: "/health"
+
+  # Retry Configuration
+  RWWWRSE_RETRY_ENABLED: "true"
+  RWWWRSE_RETRY_MAX_ATTEMPTS: "3"
+  RWWWRSE_RETRY_INITIAL_INTERVAL: "1s"
+  RWWWRSE_RETRY_MAX_INTERVAL: "10s"
+  RWWWRSE_RETRY_MULTIPLIER: "2"
+
+  # Request ID Configuration
+  RWWWRSE_REQUEST_ID_ENABLED: "true"
+  RWWWRSE_REQUEST_ID_HEADER: "X-Request-ID"
+  RWWWRSE_REQUEST_ID_GENERATOR: "uuid"
+
+  # GCP-Specific Environment Variables
+  GOOGLE_APPLICATION_CREDENTIALS: ""  # Managed by Workload Identity
+  GCLOUD_PROJECT: "your-project-id"
+  GCLOUD_REGION: "us-central1"
+  
+  # Google Cloud Monitoring Integration
+  RWWWRSE_GCP_MONITORING_ENABLED: "true"
+  RWWWRSE_GCP_MONITORING_PROJECT_ID: "your-project-id"
+  RWWWRSE_GCP_MONITORING_RESOURCE_TYPE: "k8s_container"
+  
+  # Google Cloud Logging Integration
+  RWWWRSE_GCP_LOGGING_ENABLED: "true"
+  RWWWRSE_GCP_LOGGING_PROJECT_ID: "your-project-id"
+  RWWWRSE_GCP_LOGGING_LOG_ID: "rwwwrse-access-log"
+
+  # Kubernetes-Specific Configuration
+  RWWWRSE_K8S_NAMESPACE: "rwwwrse"
+  RWWWRSE_K8S_SERVICE_NAME: "rwwwrse"
+  RWWWRSE_K8S_POD_NAME: ""  # Injected by downward API
+  RWWWRSE_K8S_NODE_NAME: ""  # Injected by downward API
+
+  # Target Configuration
+  RWWWRSE_TARGETS: |
+    {
+      "api.example.com": {
+        "backends": [
+          "http://api-service.default.svc.cluster.local:3000"
+        ],
+        "health_check": {
+          "enabled": true,
+          "path": "/health",
+          "interval": "30s",
+          "timeout": "10s"
+        },
+        "retry": {
+          "enabled": true,
+          "max_attempts": 3,
+          "initial_interval": "1s"
+        },
+        "circuit_breaker": {
+          "enabled": true,
+          "threshold": 10,
+          "timeout": "60s"
+        },
+        "rate_limit": {
+          "enabled": true,
+          "requests": 500,
+          "window": "1m"
+        }
+      },
+      "app.example.com": {
+        "backends": [
+          "http://frontend-service.default.svc.cluster.local:80"
+        ],
+        "health_check": {
+          "enabled": true,
+          "path": "/",
+          "interval": "30s",
+          "timeout": "10s"
+        },
+        "static": {
+          "enabled": true,
+          "cache_control": "public, max-age=3600"
+        }
+      },
+      "web.example.com": {
+        "backends": [
+          "http://web-service.default.svc.cluster.local:8080"
+        ],
+        "health_check": {
+          "enabled": true,
+          "path": "/health",
+          "interval": "30s",
+          "timeout": "10s"
+        },
+        "middleware": {
+          "compression": true,
+          "security_headers": true,
+          "cors": true
+        }
+      },
+      "admin.example.com": {
+        "backends": [
+          "http://admin-service.default.svc.cluster.local:9000"
+        ],
+        "health_check": {
+          "enabled": true,
+          "path": "/admin/health",
+          "interval": "30s",
+          "timeout": "10s"
+        },
+        "auth": {
+          "enabled": true,
+          "type": "jwt",
+          "secret_key_env": "JWT_SECRET"
+        },
+        "rate_limit": {
+          "enabled": true,
+          "requests": 100,
+          "window": "1m"
+        }
+      }
+    }
+
+  # Sample Application Configuration
+  RWWWRSE_SAMPLE_APPS: |
+    {
+      "sample-api": {
+        "enabled": true,
+        "host": "sample-api.example.com",
+        "backends": [
+          "http://sample-api-service.rwwwrse.svc.cluster.local:3000"
+        ],
+        "config": {
+          "timeout": "30s",
+          "retries": 3,
+          "health_check": true
+        }
+      },
+      "sample-web": {
+        "enabled": true,
+        "host": "sample-web.example.com",
+        "backends": [
+          "http://sample-web-service.rwwwrse.svc.cluster.local:8080"
+        ],
+        "config": {
+          "static_files": true,
+          "compression": true,
+          "cache_headers": true
+        }
+      }
+    }
+
+---
+# Sample content for demo applications
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sample-content
+  namespace: rwwwrse
+  labels:
+    app: rwwwrse
+    component: sample-content
+    version: v1.0.0
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>rwwwrse on Google Kubernetes Engine</title>
+        <style>
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+            
+            body {
+                font-family: 'Google Sans', 'Roboto', Arial, sans-serif;
+                line-height: 1.6;
+                color: #333;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            
+            .container {
+                background: white;
+                padding: 2rem;
+                border-radius: 10px;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+                text-align: center;
+                max-width: 600px;
+                margin: 2rem;
+            }
+            
+            .logo {
+                font-size: 3rem;
+                font-weight: bold;
+                background: linear-gradient(45deg, #4285f4, #34a853, #fbbc04, #ea4335);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                background-clip: text;
+                margin-bottom: 1rem;
+            }
+            
+            .subtitle {
+                color: #666;
+                font-size: 1.2rem;
+                margin-bottom: 2rem;
+            }
+            
+            .features {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+                gap: 1rem;
+                margin: 2rem 0;
+            }
+            
+            .feature {
+                padding: 1rem;
+                background: #f8f9fa;
+                border-radius: 8px;
+                border-left: 4px solid #4285f4;
+            }
+            
+            .feature h3 {
+                color: #4285f4;
+                margin-bottom: 0.5rem;
+            }
+            
+            .status {
+                margin: 2rem 0;
+                padding: 1rem;
+                background: #e8f5e8;
+                border-radius: 5px;
+                border-left: 4px solid #34a853;
+            }
+            
+            .gcp-badge {
+                display: inline-block;
+                background: #4285f4;
+                color: white;
+                padding: 0.5rem 1rem;
+                border-radius: 20px;
+                font-size: 0.9rem;
+                margin: 1rem 0;
+            }
+            
+            .links {
+                margin-top: 2rem;
+            }
+            
+            .links a {
+                display: inline-block;
+                margin: 0.5rem;
+                padding: 0.8rem 1.5rem;
+                background: #4285f4;
+                color: white;
+                text-decoration: none;
+                border-radius: 5px;
+                transition: background 0.3s;
+            }
+            
+            .links a:hover {
+                background: #3367d6;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="logo">rwwwrse</div>
+            <div class="subtitle">Reverse Proxy Server</div>
+            <div class="gcp-badge">🚀 Running on Google Kubernetes Engine</div>
+            
+            <div class="status">
+                <strong>✅ Status:</strong> Successfully deployed on GKE with Google Cloud integrations
+            </div>
+            
+            <div class="features">
+                <div class="feature">
+                    <h3>🔐 Workload Identity</h3>
+                    <p>Secure access to GCP services without storing keys</p>
+                </div>
+                <div class="feature">
+                    <h3>📊 Cloud Monitoring</h3>
+                    <p>Integrated metrics and alerting with Google Cloud</p>
+                </div>
+                <div class="feature">
+                    <h3>🔍 Cloud Logging</h3>
+                    <p>Centralized logging with advanced search and analysis</p>
+                </div>
+                <div class="feature">
+                    <h3>⚡ Auto Scaling</h3>
+                    <p>HPA, VPA, and cluster autoscaling for optimal resource usage</p>
+                </div>
+                <div class="feature">
+                    <h3>🌐 Global Load Balancer</h3>
+                    <p>Google Cloud Load Balancer with SSL termination</p>
+                </div>
+                <div class="feature">
+                    <h3>🛡️ Security</h3>
+                    <p>Shielded nodes, network policies, and pod security standards</p>
+                </div>
+            </div>
+            
+            <div class="links">
+                <a href="/health">Health Check</a>
+                <a href="/metrics">Metrics</a>
+                <a href="https://cloud.google.com/kubernetes-engine" target="_blank">GKE Docs</a>
+            </div>
+            
+            <p style="margin-top: 2rem; color: #666; font-size: 0.9rem;">
+                Deployment time: <span id="timestamp"></span>
+            </p>
+        </div>
+        
+        <script>
+            document.getElementById('timestamp').textContent = new Date().toLocaleString();
+            
+            // Health check display
+            fetch('/health')
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Health check:', data);
+                })
+                .catch(error => {
+                    console.log('Health check error:', error);
+                });
+        </script>
+    </body>
+    </html>
+
+  api.json: |
+    {
+      "service": "rwwwrse-sample-api",
+      "version": "1.0.0",
+      "platform": "Google Kubernetes Engine",
+      "features": [
+        "Workload Identity",
+        "Cloud Monitoring",
+        "Cloud Logging", 
+        "Auto Scaling",
+        "Load Balancing",
+        "SSL/TLS"
+      ],
+      "endpoints": {
+        "health": "/health",
+        "metrics": "/metrics",
+        "api": "/api/v1"
+      },
+      "gcp_integrations": {
+        "monitoring": true,
+        "logging": true,
+        "workload_identity": true,
+        "load_balancer": "Google Cloud Load Balancer",
+        "container_registry": "Google Container Registry"
+      }
+    }
+
+  nginx.conf: |
+    server {
+        listen 80;
+        server_name sample-web.example.com;
+        root /usr/share/nginx/html;
+        index index.html;
+        
+        # Security headers
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        
+        # Compression
+        gzip on;
+        gzip_types text/css application/javascript text/javascript application/json;
+        
+        # Cache static assets
+        location ~* \.(css|js|jpg|jpeg|png|gif|ico|svg)$ {
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+        }
+        
+        # Health check
+        location /health {
+            access_log off;
+            return 200 "healthy\n";
+            add_header Content-Type text/plain;
+        }
+        
+        # Main content
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+    }

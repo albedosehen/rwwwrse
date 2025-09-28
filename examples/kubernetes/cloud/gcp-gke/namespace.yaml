@@ -1,0 +1,134 @@
+# Namespace for rwwwrse on Google Kubernetes Engine (GKE)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rwwwrse
+  labels:
+    name: rwwwrse
+    environment: production
+    managed-by: gke
+    cloud.google.com/gke-cluster: rwwwrse-cluster
+  annotations:
+    cloud.google.com/load-balancer-type: "External"
+    iam.gke.io/gcp-service-account: rwwwrse-sa@PROJECT_ID.iam.gserviceaccount.com
+---
+# Resource quota for GKE production workloads
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: rwwwrse-quota
+  namespace: rwwwrse
+spec:
+  hard:
+    requests.cpu: "20"
+    requests.memory: 40Gi
+    limits.cpu: "40"
+    limits.memory: 80Gi
+    persistentvolumeclaims: "30"
+    services: "25"
+    secrets: "25"
+    configmaps: "25"
+    services.loadbalancers: "10"
+    services.nodeports: "15"
+---
+# Limit range for pods
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: rwwwrse-limits
+  namespace: rwwwrse
+spec:
+  limits:
+  - default:
+      cpu: "500m"
+      memory: "512Mi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "128Mi"
+    type: Container
+  - default:
+      storage: "10Gi"
+    type: PersistentVolumeClaim
+---
+# Network policy for GKE
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rwwwrse-network-policy
+  namespace: rwwwrse
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    - namespaceSelector:
+        matchLabels:
+          name: gke-system
+    - namespaceSelector:
+        matchLabels:
+          name: rwwwrse
+    - podSelector: {}
+  - from: []
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 9090
+  egress:
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 80
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 6443  # Kubernetes API
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: rwwwrse
+    - podSelector: {}
+---
+# Pod security policy for GKE
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: rwwwrse-psp
+  namespace: rwwwrse
+  annotations:
+    seccomp.security.alpha.kubernetes.io/allowedProfileNames: 'runtime/default'
+    seccomp.security.alpha.kubernetes.io/defaultProfileName: 'runtime/default'
+spec:
+  privileged: false
+  allowPrivilegeEscalation: false
+  requiredDropCapabilities:
+    - ALL
+  volumes:
+    - 'configMap'
+    - 'emptyDir'
+    - 'projected'
+    - 'secret'
+    - 'downwardAPI'
+    - 'persistentVolumeClaim'
+  runAsUser:
+    rule: 'MustRunAsNonRoot'
+  supplementalGroups:
+    rule: 'MustRunAs'
+    ranges:
+      - min: 1
+        max: 65535
+  fsGroup:
+    rule: 'MustRunAs'
+    ranges:
+      - min: 1
+        max: 65535
+  readOnlyRootFilesystem: true
