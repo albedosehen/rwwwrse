@@ -178,8 +178,8 @@ func extractIPFromHeader(r *http.Request, headerName string) string {
 // Example: "for=192.0.2.60;proto=http;by=203.0.113.43"
 func extractIPFromForwardedHeader(forwarded string) string {
 	// Look for "for=" parameter
-	parts := strings.SplitSeq(forwarded, ";")
-	for part := range parts {
+	parts := strings.Split(forwarded, ";")
+	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if strings.HasPrefix(strings.ToLower(part), "for=") {
 			forValue := strings.TrimSpace(part[4:])

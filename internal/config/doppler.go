@@ -141,8 +141,8 @@ func (dp *DopplerProvider) fetchDopplerSecrets() (map[string]string, error) {
 	// The output is in JSON format, we need to parse it
 	// For simplicity, we'll use a simple string parsing approach
 	// In a production environment, you would use json.Unmarshal
-	lines := strings.SplitSeq(string(output), "\n")
-	for line := range lines {
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" || line == "{" || line == "}" {
 			continue
