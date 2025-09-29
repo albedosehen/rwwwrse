@@ -297,7 +297,7 @@ func (p *prometheusCollector) StartMetricsServer(ctx context.Context, address st
 	// Add health endpoint for the metrics server itself
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
+		_, _ = w.Write([]byte("OK"))
 	})
 
 	p.server = &http.Server{
@@ -309,6 +309,8 @@ func (p *prometheusCollector) StartMetricsServer(ctx context.Context, address st
 		if err := p.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			// Log error but don't fail the application
 			// This should be logged via the logger when integrated
+			// TODO: Add proper error logging when logger is available
+			_ = err // Acknowledge error is intentionally not handled here
 		}
 	}()
 

@@ -152,6 +152,8 @@ func (m *corsMiddleware) Wrap(next http.Handler) http.Handler {
 
 			if m.metrics != nil {
 				// TODO: Add CORS metrics when interface is extended
+				// m.metrics.RecordCORSBlocked(origin, r.Method)
+				_ = m.metrics // Acknowledge metrics is available but not used yet
 			}
 
 			w.WriteHeader(http.StatusForbidden)
@@ -325,7 +327,7 @@ func (m *corsMiddleware) isMethodAllowed(method string) bool {
 func (m *corsMiddleware) setVaryHeader(headers http.Header, r *http.Request) {
 	vary := headers.Get("Vary")
 	varyHeaders := []string{}
-	
+
 	// Always vary on Origin for CORS requests
 	if vary == "" {
 		varyHeaders = append(varyHeaders, "Origin")
@@ -335,21 +337,21 @@ func (m *corsMiddleware) setVaryHeader(headers http.Header, r *http.Request) {
 		// Origin already present, keep existing vary header
 		return
 	}
-	
+
 	// Add Access-Control-Request-Method to Vary for preflight requests
 	if r.Method == http.MethodOptions {
 		requestMethod := r.Header.Get("Access-Control-Request-Method")
 		if requestMethod != "" && !strings.Contains(vary, "Access-Control-Request-Method") {
 			varyHeaders = append(varyHeaders, "Access-Control-Request-Method")
 		}
-		
+
 		// Add Access-Control-Request-Headers to Vary for preflight requests
 		requestHeaders := r.Header.Get("Access-Control-Request-Headers")
 		if requestHeaders != "" && !strings.Contains(vary, "Access-Control-Request-Headers") {
 			varyHeaders = append(varyHeaders, "Access-Control-Request-Headers")
 		}
 	}
-	
+
 	if len(varyHeaders) > 0 {
 		headers.Set("Vary", strings.Join(varyHeaders, ", "))
 	}

@@ -342,7 +342,7 @@ func TestRateLimitMiddleware_Wrap_AllowedRequests(t *testing.T) {
 
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("success"))
+				_, _ = w.Write([]byte("success"))
 			})
 
 			// Act & Assert - Make requests within limit
@@ -425,7 +425,7 @@ func TestRateLimitMiddleware_Wrap_RateLimitExceeded(t *testing.T) {
 
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("success"))
+				_, _ = w.Write([]byte("success"))
 			})
 
 			blockedCount := 0
@@ -652,7 +652,7 @@ func TestRateLimitMiddleware_Integration(t *testing.T) {
 
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("integration success"))
+				_, _ = w.Write([]byte("integration success"))
 			})
 
 			req := httptest.NewRequest(http.MethodGet, "/test", nil)

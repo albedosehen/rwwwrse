@@ -53,7 +53,7 @@ func TestRecoveryMiddleware_Wrap_NormalExecution(t *testing.T) {
 			name: "Wrap_NormalHandler_Success",
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("success"))
+				_, _ = w.Write([]byte("success"))
 			},
 			expectedStatus: http.StatusOK,
 			expectedBody:   "success",
@@ -62,7 +62,7 @@ func TestRecoveryMiddleware_Wrap_NormalExecution(t *testing.T) {
 			name: "Wrap_ErrorHandler_Success",
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusBadRequest)
-				w.Write([]byte("error"))
+				_, _ = w.Write([]byte("error"))
 			},
 			expectedStatus: http.StatusBadRequest,
 			expectedBody:   "error",

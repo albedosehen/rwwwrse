@@ -104,18 +104,18 @@ func NewDefaultTokenBucketRateLimiter(
 		logger:         logger,
 		limiters:       make(map[string]*simpleLimiter),
 	}
-	
+
 	// Start background cleanup
 	rl.startCleanup()
-	
+
 	return rl
 }
 
 // Constants for rate limiter configuration.
 const (
 	defaultCleanupInterval = 10 * time.Minute
-	maxIdleTime           = 30 * time.Minute
-	nanosPerSecond        = 1e9
+	maxIdleTime            = 30 * time.Minute
+	nanosPerSecond         = 1e9
 )
 
 // simpleBucketRateLimiter is a thread-safe token bucket rate limiter implementation.
@@ -132,11 +132,11 @@ type simpleBucketRateLimiter struct {
 
 // simpleLimiter tracks rate limiting for a single key using token bucket algorithm.
 type simpleLimiter struct {
-	tokens       float64   // Current number of tokens (can be fractional)
-	lastRefill   time.Time // Last time tokens were refilled
-	maxTokens    int       // Maximum number of tokens (burst size)
-	refillRate   float64   // Tokens per second
-	mu           sync.Mutex // Protects access to limiter state
+	tokens     float64    // Current number of tokens (can be fractional)
+	lastRefill time.Time  // Last time tokens were refilled
+	maxTokens  int        // Maximum number of tokens (burst size)
+	refillRate float64    // Tokens per second
+	mu         sync.Mutex // Protects access to limiter state
 }
 
 // newSimpleLimiter creates a new rate limiter for a specific key.
@@ -156,21 +156,21 @@ func (sl *simpleLimiter) allow() bool {
 	defer sl.mu.Unlock()
 
 	now := time.Now()
-	
+
 	// Calculate tokens to add based on elapsed time
 	elapsed := now.Sub(sl.lastRefill)
 	tokensToAdd := sl.refillRate * elapsed.Seconds()
-	
+
 	// Add tokens, but don't exceed maximum
 	sl.tokens = min(sl.tokens+tokensToAdd, float64(sl.maxTokens))
 	sl.lastRefill = now
-	
+
 	// Check if we have at least one token
 	if sl.tokens >= 1.0 {
 		sl.tokens--
 		return true
 	}
-	
+
 	return false
 }
 
@@ -180,21 +180,21 @@ func (sl *simpleLimiter) stats() RateLimitStats {
 	defer sl.mu.Unlock()
 
 	now := time.Now()
-	
+
 	// Calculate current tokens
 	elapsed := now.Sub(sl.lastRefill)
 	tokensToAdd := sl.refillRate * elapsed.Seconds()
 	currentTokens := min(sl.tokens+tokensToAdd, float64(sl.maxTokens))
-	
+
 	remaining := int(currentTokens)
 	requests := sl.maxTokens - remaining
-	
+
 	// Calculate when next token will be available
 	var retryAfter time.Duration
 	if remaining == 0 {
 		retryAfter = time.Duration(nanosPerSecond / sl.refillRate)
 	}
-	
+
 	return RateLimitStats{
 		Requests:   requests,
 		Remaining:  remaining,
@@ -207,7 +207,7 @@ func (sl *simpleLimiter) stats() RateLimitStats {
 func (sl *simpleLimiter) isIdle() bool {
 	sl.mu.Lock()
 	defer sl.mu.Unlock()
-	
+
 	return time.Since(sl.lastRefill) > maxIdleTime && sl.tokens >= float64(sl.maxTokens)
 }
 
@@ -236,7 +236,7 @@ func (rl *simpleBucketRateLimiter) Reset(key string) error {
 
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
-	
+
 	delete(rl.limiters, key)
 	return nil
 }
@@ -317,7 +317,7 @@ func (rl *simpleBucketRateLimiter) startCleanup() {
 	rl.once.Do(func() {
 		rl.cleanupTicker = time.NewTicker(defaultCleanupInterval)
 		rl.stopCleanup = make(chan struct{})
-		
+
 		go rl.cleanupLoop()
 	})
 }
@@ -325,7 +325,7 @@ func (rl *simpleBucketRateLimiter) startCleanup() {
 // cleanupLoop runs periodic cleanup in a separate goroutine.
 func (rl *simpleBucketRateLimiter) cleanupLoop() {
 	defer rl.cleanupTicker.Stop()
-	
+
 	for {
 		select {
 		case <-rl.cleanupTicker.C:

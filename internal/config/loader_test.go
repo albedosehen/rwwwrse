@@ -315,7 +315,11 @@ backends:
 	// Change working directory to temp dir for this test
 	oldWd, err := os.Getwd()
 	require.NoError(t, err)
-	defer os.Chdir(oldWd)
+	defer func() {
+		if err := os.Chdir(oldWd); err != nil {
+			t.Errorf("Failed to restore working directory: %v", err)
+		}
+	}()
 
 	err = os.Chdir(tempDir)
 	require.NoError(t, err)

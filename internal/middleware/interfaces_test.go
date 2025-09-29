@@ -35,7 +35,7 @@ func TestMiddlewareFunc(t *testing.T) {
 					return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 						w.Header().Set("X-Modified", "true")
 						w.WriteHeader(http.StatusOK)
-						w.Write([]byte("modified"))
+						_, _ = w.Write([]byte("modified"))
 					})
 				})
 			},
@@ -49,7 +49,7 @@ func TestMiddlewareFunc(t *testing.T) {
 			middleware := tt.setupFn()
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("test response"))
+				_, _ = w.Write([]byte("test response"))
 			})
 
 			req := httptest.NewRequest(http.MethodGet, "/test", nil)

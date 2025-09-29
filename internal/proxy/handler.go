@@ -257,7 +257,7 @@ func (ph *proxyHandler) writeErrorResponse(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Write JSON response
-	w.Write([]byte(`{"error":"` + proxyErr.Message + `","status":` + string(rune(statusCode)) + `,"request_id":"` + r.Header.Get(HeaderRequestID) + `","timestamp":"` + time.Now().UTC().Format(time.RFC3339) + `"}`))
+	_, _ = w.Write([]byte(`{"error":"` + proxyErr.Message + `","status":` + string(rune(statusCode)) + `,"request_id":"` + r.Header.Get(HeaderRequestID) + `","timestamp":"` + time.Now().UTC().Format(time.RFC3339) + `"}`))
 }
 
 func (ph *proxyHandler) Shutdown(ctx context.Context) error {

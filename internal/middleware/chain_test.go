@@ -116,7 +116,7 @@ func TestChain_Then(t *testing.T) {
 			name: "Then_WithValidHandler",
 			handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("handler response"))
+				_, _ = w.Write([]byte("handler response"))
 			}),
 			wantBody: "handler response",
 		},
@@ -155,7 +155,7 @@ func TestChain_ThenFunc(t *testing.T) {
 			name: "ThenFunc_ValidHandlerFunc",
 			handlerFunc: func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("handler func response"))
+				_, _ = w.Write([]byte("handler func response"))
 			},
 			wantBody:   "handler func response",
 			wantStatus: http.StatusOK,
@@ -164,7 +164,7 @@ func TestChain_ThenFunc(t *testing.T) {
 			name: "ThenFunc_ErrorHandlerFunc",
 			handlerFunc: func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusInternalServerError)
-				w.Write([]byte("error"))
+				_, _ = w.Write([]byte("error"))
 			},
 			wantBody:   "error",
 			wantStatus: http.StatusInternalServerError,

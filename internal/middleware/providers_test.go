@@ -614,7 +614,7 @@ func TestCompleteMiddlewareChain_Integration(t *testing.T) {
 			// Test that chain can be used (basic functionality)
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("OK"))
+				_, _ = w.Write([]byte("OK"))
 			})
 			wrappedHandler := chain.Then(handler)
 

@@ -47,7 +47,7 @@ func TestHealthChecker_Check(t *testing.T) {
 			name: "successful health check",
 			serverHandler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("OK"))
+				_, _ = w.Write([]byte("OK"))
 			}),
 			wantHealthy:    true,
 			wantStatusCode: 200,
@@ -57,7 +57,7 @@ func TestHealthChecker_Check(t *testing.T) {
 			name: "failed health check - 500 status",
 			serverHandler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusInternalServerError)
-				w.Write([]byte("Internal Server Error"))
+				_, _ = w.Write([]byte("Internal Server Error"))
 			}),
 			wantHealthy:    false,
 			wantStatusCode: 500,

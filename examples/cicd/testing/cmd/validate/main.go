@@ -164,7 +164,7 @@ func (v *WorkflowValidator) validateReusableWorkflowReference(ctx context.Contex
 		// Local reusable workflow
 		referencedFile := strings.TrimPrefix(uses, "./")
 		fullPath := filepath.Join(filepath.Dir(filePath), referencedFile)
-		
+
 		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 			return fmt.Errorf("referenced workflow file does not exist: %s", fullPath)
 		}
@@ -229,9 +229,9 @@ func (v *WorkflowValidator) getOverallStatus() string {
 
 // ValidationReport represents the complete validation report
 type ValidationReport struct {
-	Timestamp time.Time         `json:"timestamp"`
-	Summary   ValidationSummary `json:"summary"`
-	Errors    []ValidationError `json:"errors"`
+	Timestamp time.Time           `json:"timestamp"`
+	Summary   ValidationSummary   `json:"summary"`
+	Errors    []ValidationError   `json:"errors"`
 	Warnings  []ValidationWarning `json:"warnings"`
 }
 
@@ -253,7 +253,7 @@ func main() {
 	workflowsPath := workflowsDir
 	if _, err := os.Stat(workflowsPath); !os.IsNotExist(err) {
 		fmt.Printf("📁 Validating workflows in %s...\n", workflowsPath)
-		
+
 		err := filepath.WalkDir(workflowsPath, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -284,7 +284,7 @@ func main() {
 	actionsPath := actionsDir
 	if _, err := os.Stat(actionsPath); !os.IsNotExist(err) {
 		fmt.Printf("📁 Validating actions in %s...\n", actionsPath)
-		
+
 		err := filepath.WalkDir(actionsPath, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -314,28 +314,28 @@ func main() {
 	// Generate and display report
 	fmt.Println("\n📊 Validation Report")
 	fmt.Println("====================")
-	
+
 	report := validator.GenerateReport()
 	fmt.Printf("Status: %s\n", report.Summary.Status)
 	fmt.Printf("Errors: %d\n", report.Summary.TotalErrors)
 	fmt.Printf("Warnings: %d\n", report.Summary.TotalWarnings)
-	
+
 	if len(report.Errors) > 0 {
 		fmt.Println("\n❌ Errors:")
 		for _, err := range report.Errors {
 			fmt.Printf("  - %s: %s (%s)\n", err.File, err.Message, err.Type)
 		}
 	}
-	
+
 	if len(report.Warnings) > 0 {
 		fmt.Println("\n⚠️ Warnings:")
 		for _, warning := range report.Warnings {
 			fmt.Printf("  - %s: %s (%s)\n", warning.File, warning.Message, warning.Type)
 		}
 	}
-	
+
 	fmt.Println("\n✅ Workflow validation completed!")
-	
+
 	// Exit with appropriate code
 	if report.Summary.Status == "FAILED" {
 		os.Exit(1)

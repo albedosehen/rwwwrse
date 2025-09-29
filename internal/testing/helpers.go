@@ -82,7 +82,7 @@ func CreateTestBackend(t *testing.T, handler http.HandlerFunc) *httptest.Server 
 	if handler == nil {
 		handler = func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("test backend response"))
+			_, _ = w.Write([]byte("test backend response"))
 		}
 	}
 
@@ -98,7 +98,7 @@ func CreateTestBackendWithStatus(t *testing.T, status int, body string) *httptes
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(status)
 		if body != "" {
-			w.Write([]byte(body))
+			_, _ = w.Write([]byte(body))
 		}
 	}
 
@@ -111,7 +111,7 @@ func CreateSlowTestBackend(t *testing.T, delay time.Duration) *httptest.Server {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(delay)
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("slow response"))
+		_, _ = w.Write([]byte("slow response"))
 	}
 
 	return CreateTestBackend(t, handler)

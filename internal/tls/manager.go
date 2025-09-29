@@ -119,6 +119,8 @@ func (m *certMagicManager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Cert
 		}
 		if m.metrics != nil {
 			// TODO: Add certificate error metrics when interface is extended
+			// m.metrics.RecordCertificateError(hello.ServerName, err)
+			_ = m.metrics // Acknowledge metrics is available but not used yet
 		}
 		return nil, fmt.Errorf("failed to get certificate for %s: %w", hello.ServerName, err)
 	}
@@ -131,6 +133,8 @@ func (m *certMagicManager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Cert
 
 	if m.metrics != nil {
 		// TODO: Add certificate success metrics when interface is extended
+		// m.metrics.RecordCertificateSuccess(hello.ServerName)
+		_ = m.metrics // Acknowledge metrics is available but not used yet
 	}
 
 	return cert, nil

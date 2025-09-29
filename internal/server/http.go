@@ -232,8 +232,9 @@ func (s *httpServer) IsHTTPS() bool {
 
 type httpsServer struct {
 	*httpServer
-	tlsConfig   *tls.Config
-	certManager interface{} // TLS certificate manager
+	tlsConfig *tls.Config
+	// Note: certManager removed as it was unused
+	// TODO: Add certificate manager when TLS management is implemented
 }
 
 func NewHTTPSServer(

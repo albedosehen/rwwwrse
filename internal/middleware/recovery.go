@@ -59,5 +59,5 @@ func (m *recoveryMiddleware) handlePanic(w http.ResponseWriter, r *http.Request,
 		"timestamp": "%s"
 	}`, requestID, time.Now().UTC().Format(time.RFC3339))
 
-	w.Write([]byte(response))
+	_, _ = w.Write([]byte(response))
 }

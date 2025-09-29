@@ -233,7 +233,7 @@ func (m *rateLimitMiddleware) handleRateLimit(w http.ResponseWriter, r *http.Req
 		"timestamp": "%s"
 	}`, requestID, stats.RetryAfter.Seconds(), time.Now().UTC().Format(time.RFC3339))
 
-	w.Write([]byte(response))
+	_, _ = w.Write([]byte(response))
 }
 
 // defaultKeyFunc extracts client IP from request for rate limiting.

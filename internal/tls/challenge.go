@@ -55,7 +55,7 @@ func (h *httpChallengeHandler) HandleHTTP01Challenge(w http.ResponseWriter, r *h
 	// Return the key authorization
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(keyAuth))
+	_, _ = w.Write([]byte(keyAuth))
 }
 
 func (h *httpChallengeHandler) HandleTLSALPN01Challenge(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {

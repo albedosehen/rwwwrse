@@ -149,7 +149,9 @@ func (cb *circuitBreaker) RecordSuccess(ctx context.Context, target string) {
 
 	if cb.metrics != nil {
 		// Record success metrics
+		// TODO: Implement circuit breaker metrics recording
 		// cb.metrics.RecordCircuitBreakerEvent(target, "success")
+		_ = cb.metrics // Acknowledge metrics is available but not used yet
 	}
 }
 
@@ -202,7 +204,9 @@ func (cb *circuitBreaker) RecordFailure(ctx context.Context, target string, err 
 
 	if cb.metrics != nil {
 		// Record failure metrics
+		// TODO: Implement circuit breaker metrics recording
 		// cb.metrics.RecordCircuitBreakerEvent(target, "failure")
+		_ = cb.metrics // Acknowledge metrics is available but not used yet
 	}
 
 	if cb.logger != nil {
@@ -236,6 +240,8 @@ func (cb *circuitBreaker) State(ctx context.Context, target string) CircuitState
 	if circuit.state == CircuitOpen && time.Since(circuit.lastFailureTime) >= cb.config.Timeout {
 		// Don't transition here, just return current state
 		// Transition will happen on next Allow() call
+		// TODO: Consider if we should transition here for consistency
+		_ = circuit.state // Acknowledge state check is intentional
 	}
 
 	return circuit.state

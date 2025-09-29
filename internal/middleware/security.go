@@ -99,6 +99,8 @@ func (m *securityHeadersMiddleware) Wrap(next http.Handler) http.Handler {
 		// Record metrics
 		if m.metrics != nil {
 			// TODO: Add security headers metrics when interface is extended
+			// m.metrics.RecordSecurityHeaders(r.Method, r.URL.Path)
+			_ = m.metrics // Acknowledge metrics is available but not used yet
 		}
 
 		next.ServeHTTP(w, r)
@@ -215,6 +217,8 @@ func (m *secureHeadersOnlyMiddleware) Wrap(next http.Handler) http.Handler {
 		// Record metrics
 		if m.metrics != nil {
 			// TODO: Add security headers metrics when interface is extended
+			// m.metrics.RecordSecurityHeaders(r.Method, r.URL.Path)
+			_ = m.metrics // Acknowledge metrics is available but not used yet
 		}
 
 		next.ServeHTTP(w, r)

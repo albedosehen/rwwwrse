@@ -152,7 +152,7 @@ func TestLoggingMiddleware_Wrap_SuccessfulRequest(t *testing.T) {
 
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(tt.statusCode)
-				w.Write([]byte(tt.responseBody))
+				_, _ = w.Write([]byte(tt.responseBody))
 			})
 
 			req := httptest.NewRequest(tt.method, tt.path, nil)
@@ -244,7 +244,7 @@ func TestLoggingMiddleware_Wrap_ErrorRequest(t *testing.T) {
 
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(tt.statusCode)
-				w.Write([]byte(tt.responseBody))
+				_, _ = w.Write([]byte(tt.responseBody))
 			})
 
 			req := httptest.NewRequest(tt.method, tt.path, nil)
@@ -336,7 +336,7 @@ func TestLoggingMiddleware_Wrap_RequestWithBody(t *testing.T) {
 
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("success"))
+				_, _ = w.Write([]byte("success"))
 			})
 
 			req := httptest.NewRequest(tt.method, tt.path, bytes.NewReader([]byte(tt.requestBody)))
@@ -417,7 +417,7 @@ func TestLoggingMiddleware_Wrap_ResponseCapture(t *testing.T) {
 
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte(tt.responseBody))
+				_, _ = w.Write([]byte(tt.responseBody))
 			})
 
 			req := httptest.NewRequest(http.MethodGet, "/test", nil)
@@ -635,7 +635,7 @@ func TestLoggingMiddleware_Integration(t *testing.T) {
 
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("integration test"))
+				_, _ = w.Write([]byte("integration test"))
 			})
 
 			req := httptest.NewRequest(http.MethodGet, "/integration", nil)
@@ -684,7 +684,7 @@ func BenchmarkLoggingMiddleware_SuccessfulRequest(b *testing.B) {
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("benchmark"))
+		_, _ = w.Write([]byte("benchmark"))
 	})
 
 	wrappedHandler := middleware.Wrap(handler)
@@ -726,7 +726,7 @@ func BenchmarkLoggingMiddleware_WithBodyLogging(b *testing.B) {
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("benchmark with body"))
+		_, _ = w.Write([]byte("benchmark with body"))
 	})
 
 	wrappedHandler := middleware.Wrap(handler)

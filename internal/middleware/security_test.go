@@ -199,7 +199,7 @@ func TestSecurityHeadersMiddleware_Wrap_AllHeaders(t *testing.T) {
 
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("success"))
+				_, _ = w.Write([]byte("success"))
 			})
 
 			var req *http.Request
@@ -264,7 +264,7 @@ func TestSecurityHeadersMiddleware_Wrap_EmptyConfig(t *testing.T) {
 
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("success"))
+				_, _ = w.Write([]byte("success"))
 			})
 
 			req := httptest.NewRequest(http.MethodGet, "/test", nil)
@@ -603,7 +603,7 @@ func TestSecurityHeadersMiddleware_Integration(t *testing.T) {
 
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("integration success"))
+				_, _ = w.Write([]byte("integration success"))
 			})
 
 			req := httptest.NewRequest(http.MethodGet, "https://example.com/test", nil)

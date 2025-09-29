@@ -192,13 +192,13 @@ func TestProxyHandler_ServeHTTP(t *testing.T) {
 				switch {
 				case r.Method == "GET" && strings.Contains(r.URL.Path, "/users/123"):
 					w.WriteHeader(200)
-					w.Write([]byte(`{"message": "success"}`))
+					_, _ = w.Write([]byte(`{"message": "success"}`))
 				case r.Method == "POST" && r.URL.Path == "/users":
 					w.WriteHeader(201)
-					w.Write([]byte(`{"id": "123", "name": "John Doe"}`))
+					_, _ = w.Write([]byte(`{"id": "123", "name": "John Doe"}`))
 				default:
 					w.WriteHeader(404)
-					w.Write([]byte("Not Found"))
+					_, _ = w.Write([]byte("Not Found"))
 				}
 			}))
 			defer testServer.Close()
@@ -294,7 +294,7 @@ func TestProxyHandler_ServeHTTP_Headers(t *testing.T) {
 			testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				receivedHeaders = r.Header.Clone()
 				w.WriteHeader(200)
-				w.Write([]byte(`{"status": "ok"}`))
+				_, _ = w.Write([]byte(`{"status": "ok"}`))
 			}))
 			defer testServer.Close()
 
@@ -434,7 +434,7 @@ func BenchmarkProxyHandler_ServeHTTP(b *testing.B) {
 	// Create test server
 	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
-		w.Write([]byte(`{"status": "ok"}`))
+		_, _ = w.Write([]byte(`{"status": "ok"}`))
 	}))
 	defer testServer.Close()
 
@@ -475,7 +475,7 @@ func BenchmarkProxyHandler_ServeHTTP_WithBody(b *testing.B) {
 		// Read and echo body
 		body, _ := io.ReadAll(r.Body)
 		w.WriteHeader(200)
-		w.Write(body)
+		_, _ = w.Write(body)
 	}))
 	defer testServer.Close()
 

@@ -139,6 +139,8 @@ func (m *loggingMiddleware) Wrap(next http.Handler) http.Handler {
 		// Record metrics
 		if m.metrics != nil {
 			// TODO: Add HTTP request metrics when interface is extended
+			// m.metrics.RecordHTTPRequest(r.Method, wrapped.statusCode, duration)
+			_ = m.metrics // Acknowledge metrics is available but not used yet
 		}
 	})
 }
@@ -342,6 +344,8 @@ func (m *accessLogMiddleware) Wrap(next http.Handler) http.Handler {
 		// Record metrics
 		if m.metrics != nil {
 			// TODO: Add HTTP request metrics when interface is extended
+			// m.metrics.RecordHTTPRequest(r.Method, wrapped.statusCode, duration)
+			_ = m.metrics // Acknowledge metrics is available but not used yet
 		}
 	})
 }

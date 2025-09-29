@@ -220,7 +220,7 @@ func TestCORSMiddleware_Wrap_SimpleRequests(t *testing.T) {
 
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("success"))
+				_, _ = w.Write([]byte("success"))
 			})
 
 			req := httptest.NewRequest(tt.method, "/test", nil)
@@ -333,7 +333,7 @@ func TestCORSMiddleware_Wrap_PreflightRequests(t *testing.T) {
 					mock.Anything,
 					mock.Anything,
 				).Return()
-				
+
 				logger.On("Debug",
 					mock.Anything,
 					"CORS preflight request handled",
@@ -358,7 +358,7 @@ func TestCORSMiddleware_Wrap_PreflightRequests(t *testing.T) {
 
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("handler called"))
+				_, _ = w.Write([]byte("handler called"))
 			})
 
 			req := httptest.NewRequest(http.MethodOptions, "/test", nil)
@@ -627,7 +627,7 @@ func TestCORSMiddleware_OriginMatching(t *testing.T) {
 
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("success"))
+				_, _ = w.Write([]byte("success"))
 			})
 
 			req := httptest.NewRequest(http.MethodGet, "/test", nil)
@@ -690,7 +690,7 @@ func TestCORSMiddleware_Integration(t *testing.T) {
 
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("integration success"))
+				_, _ = w.Write([]byte("integration success"))
 			})
 
 			req := httptest.NewRequest(http.MethodGet, "/test", nil)
