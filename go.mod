@@ -1,6 +1,6 @@
 module github.com/albedosehen/rwwwrse
 
-go 1.25.0
+go 1.23.0
 
 require (
 	github.com/caddyserver/certmagic v0.24.0
