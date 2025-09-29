@@ -1,0 +1,179 @@
+name: 'Application Health Check'
+description: 'Perform comprehensive health checks on deployed applications'
+
+inputs:
+  url:
+    description: 'Base URL of the application to check'
+    required: true
+  timeout:
+    description: 'Total timeout in seconds for health checks'
+    required: false
+    default: '300'
+  retry-interval:
+    description: 'Interval between retries in seconds'
+    required: false
+    default: '10'
+  expected-status:
+    description: 'Expected HTTP status code'
+    required: false
+    default: '200'
+
+outputs:
+  status:
+    description: 'Overall health check status (healthy, unhealthy, degraded)'
+    value: ${{ steps.summary.outputs.status }}
+  response-time:
+    description: 'Average response time in milliseconds'
+    value: ${{ steps.summary.outputs.response-time }}
+
+runs:
+  using: 'composite'
+  steps:
+  - name: Validate inputs
+    shell: bash
+    run: |
+      echo "Validating health check inputs..."
+      
+      # Validate URL format
+      if [[ ! "${{ inputs.url }}" =~ ^https?:// ]]; then
+        echo "ERROR: URL must start with http:// or https://"
+        exit 1
+      fi
+      
+      # Validate timeout
+      if ! [[ "${{ inputs.timeout }}" =~ ^[0-9]+$ ]] || [ "${{ inputs.timeout }}" -lt 1 ]; then
+        echo "ERROR: Timeout must be a positive integer"
+        exit 1
+      fi
+      
+      echo "✅ All inputs validated successfully"
+
+  - name: Basic connectivity check
+    shell: bash
+    run: |
+      echo "Performing basic connectivity check..."
+      
+      BASE_URL="${{ inputs.url }}"
+      TIMEOUT="${{ inputs.timeout }}"
+      
+      # Remove trailing slash
+      BASE_URL="${BASE_URL%/}"
+      
+      echo "Testing connectivity to: $BASE_URL"
+      
+      if timeout "$TIMEOUT" curl -s --connect-timeout 10 --max-time 30 "$BASE_URL" >/dev/null 2>&1; then
+        echo "✅ Basic connectivity successful"
+        echo "connectivity=success" > /tmp/health-basic.txt
+      else
+        echo "❌ Basic connectivity failed"
+        echo "connectivity=failed" > /tmp/health-basic.txt
+      fi
+
+  - name: Health endpoint check
+    shell: bash
+    run: |
+      echo "Checking health endpoint..."
+      
+      BASE_URL="${{ inputs.url }}"
+      TIMEOUT="${{ inputs.timeout }}"
+      RETRY_INTERVAL="${{ inputs.retry-interval }}"
+      EXPECTED_STATUS="${{ inputs.expected-status }}"
+      
+      BASE_URL="${BASE_URL%/}"
+      HEALTH_URL="$BASE_URL/health"
+      
+      MAX_RETRIES=$((TIMEOUT / RETRY_INTERVAL))
+      RETRY_COUNT=0
+      HEALTH_SUCCESS=false
+      
+      echo "Checking: $HEALTH_URL"
+      echo "Max retries: $MAX_RETRIES"
+      
+      while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$HEALTH_SUCCESS" = false ]; do
+        RETRY_COUNT=$((RETRY_COUNT + 1))
+        echo "Attempt $RETRY_COUNT/$MAX_RETRIES"
+        
+        START_TIME=$(date +%s%3N)
+        HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" 2>/dev/null || echo "000")
+        END_TIME=$(date +%s%3N)
+        
+        RESPONSE_TIME=$((END_TIME - START_TIME))
+        
+        echo "Status: $HTTP_STATUS, Response Time: ${RESPONSE_TIME}ms"
+        
+        if [ "$HTTP_STATUS" = "$EXPECTED_STATUS" ]; then
+          HEALTH_SUCCESS=true
+          echo "✅ Health endpoint is healthy"
+        else
+          echo "❌ Health endpoint returned status $HTTP_STATUS (expected $EXPECTED_STATUS)"
+          if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+            echo "Retrying in ${RETRY_INTERVAL}s..."
+            sleep "$RETRY_INTERVAL"
+          fi
+        fi
+      done
+      
+      echo "health_success=$HEALTH_SUCCESS" > /tmp/health-endpoint.txt
+      echo "health_response_time=$RESPONSE_TIME" >> /tmp/health-endpoint.txt
+      echo "health_attempts=$RETRY_COUNT" >> /tmp/health-endpoint.txt
+
+  - name: Metrics endpoint check
+    shell: bash
+    run: |
+      echo "Checking metrics endpoint..."
+      
+      BASE_URL="${{ inputs.url }}"
+      BASE_URL="${BASE_URL%/}"
+      METRICS_URL="$BASE_URL/metrics"
+      
+      if curl -s --connect-timeout 10 --max-time 30 "$METRICS_URL" >/dev/null 2>&1; then
+        echo "✅ Metrics endpoint is accessible"
+        echo "metrics=available" > /tmp/health-metrics.txt
+      else
+        echo "⚠️ Metrics endpoint is not accessible"
+        echo "metrics=unavailable" > /tmp/health-metrics.txt
+      fi
+
+  - name: Generate summary
+    shell: bash
+    id: summary
+    run: |
+      echo "Generating health check summary..."
+      
+      # Read results
+      CONNECTIVITY=$(grep "connectivity=" /tmp/health-basic.txt 2>/dev/null | cut -d= -f2 || echo "unknown")
+      HEALTH_SUCCESS=$(grep "health_success=" /tmp/health-endpoint.txt 2>/dev/null | cut -d= -f2 || echo "false")
+      RESPONSE_TIME=$(grep "health_response_time=" /tmp/health-endpoint.txt 2>/dev/null | cut -d= -f2 || echo "0")
+      METRICS_STATUS=$(grep "metrics=" /tmp/health-metrics.txt 2>/dev/null | cut -d= -f2 || echo "unknown")
+      
+      # Determine overall status
+      if [ "$CONNECTIVITY" = "success" ] && [ "$HEALTH_SUCCESS" = "true" ]; then
+        if [ "$RESPONSE_TIME" -gt "2000" ]; then
+          OVERALL_STATUS="degraded"
+        else
+          OVERALL_STATUS="healthy"
+        fi
+      else
+        OVERALL_STATUS="unhealthy"
+      fi
+      
+      echo "Health Check Summary:"
+      echo "  Overall Status: $OVERALL_STATUS"
+      echo "  Connectivity: $CONNECTIVITY"
+      echo "  Health Endpoint: $HEALTH_SUCCESS"
+      echo "  Response Time: ${RESPONSE_TIME}ms"
+      echo "  Metrics: $METRICS_STATUS"
+      
+      # Set outputs
+      echo "status=$OVERALL_STATUS" >> $GITHUB_OUTPUT
+      echo "response-time=$RESPONSE_TIME" >> $GITHUB_OUTPUT
+      
+      # Exit with error if unhealthy
+      if [ "$OVERALL_STATUS" = "unhealthy" ]; then
+        echo "❌ Health check failed - application is unhealthy"
+        exit 1
+      elif [ "$OVERALL_STATUS" = "degraded" ]; then
+        echo "⚠️ Health check completed with warnings - application is degraded"
+      else
+        echo "✅ Health check passed - application is healthy"
+      fi

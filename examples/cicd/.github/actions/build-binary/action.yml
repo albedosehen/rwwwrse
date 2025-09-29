@@ -1,0 +1,241 @@
+name: 'Build Go Binary'
+description: 'Build Go binary with cross-compilation support and build information injection'
+
+inputs:
+  goos:
+    description: 'Target operating system'
+    required: true
+  goarch:
+    description: 'Target architecture'
+    required: true
+  binary-name:
+    description: 'Name of the binary to build'
+    required: false
+    default: 'rwwwrse'
+  source-path:
+    description: 'Path to the main Go package'
+    required: false
+    default: './cmd/rwwwrse'
+  output-dir:
+    description: 'Output directory for built binaries'
+    required: false
+    default: 'dist'
+  version:
+    description: 'Version to embed in binary'
+    required: false
+    default: 'dev'
+  commit:
+    description: 'Commit hash to embed in binary'
+    required: false
+    default: 'unknown'
+  ldflags:
+    description: 'Additional ldflags for go build'
+    required: false
+    default: ''
+  build-tags:
+    description: 'Build tags to use'
+    required: false
+    default: ''
+  cgo-enabled:
+    description: 'Whether to enable CGO'
+    required: false
+    default: '0'
+
+outputs:
+  binary-path:
+    description: 'Path to the built binary'
+    value: ${{ steps.build.outputs.binary-path }}
+  binary-size:
+    description: 'Size of the built binary in bytes'
+    value: ${{ steps.build.outputs.binary-size }}
+  build-time:
+    description: 'Time taken to build the binary'
+    value: ${{ steps.build.outputs.build-time }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate inputs
+      shell: bash
+      run: |
+        echo "Validating build inputs..."
+        
+        # Validate GOOS
+        case "${{ inputs.goos }}" in
+          linux|darwin|windows|freebsd|openbsd|netbsd|dragonfly|solaris|plan9|js|android|ios)
+            echo "✅ Valid GOOS: ${{ inputs.goos }}"
+            ;;
+          *)
+            echo "❌ Invalid GOOS: ${{ inputs.goos }}"
+            exit 1
+            ;;
+        esac
+        
+        # Validate GOARCH
+        case "${{ inputs.goarch }}" in
+          amd64|386|arm|arm64|ppc64|ppc64le|mips|mipsle|mips64|mips64le|s390x|riscv64|wasm)
+            echo "✅ Valid GOARCH: ${{ inputs.goarch }}"
+            ;;
+          *)
+            echo "❌ Invalid GOARCH: ${{ inputs.goarch }}"
+            exit 1
+            ;;
+        esac
+        
+        # Check if source path exists
+        if [ ! -d "${{ inputs.source-path }}" ]; then
+          echo "❌ Source path does not exist: ${{ inputs.source-path }}"
+          exit 1
+        fi
+        
+        echo "✅ All inputs validated successfully"
+
+    - name: Prepare build environment
+      shell: bash
+      run: |
+        echo "Preparing build environment..."
+        
+        # Create output directory
+        mkdir -p "${{ inputs.output-dir }}"
+        
+        # Set build environment variables
+        echo "GOOS=${{ inputs.goos }}" >> $GITHUB_ENV
+        echo "GOARCH=${{ inputs.goarch }}" >> $GITHUB_ENV
+        echo "CGO_ENABLED=${{ inputs.cgo-enabled }}" >> $GITHUB_ENV
+        
+        echo "Build environment prepared:"
+        echo "- GOOS: ${{ inputs.goos }}"
+        echo "- GOARCH: ${{ inputs.goarch }}"
+        echo "- CGO_ENABLED: ${{ inputs.cgo-enabled }}"
+        echo "- Output directory: ${{ inputs.output-dir }}"
+
+    - name: Build binary
+      id: build
+      shell: bash
+      env:
+        GOOS: ${{ inputs.goos }}
+        GOARCH: ${{ inputs.goarch }}
+        CGO_ENABLED: ${{ inputs.cgo-enabled }}
+      run: |
+        echo "Building Go binary..."
+        
+        # Determine binary name with extension
+        BINARY_NAME="${{ inputs.binary-name }}"
+        if [ "${{ inputs.goos }}" = "windows" ]; then
+          BINARY_NAME="${BINARY_NAME}.exe"
+        fi
+        
+        # Construct output path
+        OUTPUT_PATH="${{ inputs.output-dir }}/${BINARY_NAME}-${{ inputs.goos }}-${{ inputs.goarch }}"
+        
+        # Build ldflags
+        BASE_LDFLAGS="-w -s"
+        VERSION_LDFLAGS="-X main.version=${{ inputs.version }} -X main.commit=${{ inputs.commit }}"
+        BUILD_TIME_LDFLAGS="-X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        FULL_LDFLAGS="${BASE_LDFLAGS} ${VERSION_LDFLAGS} ${BUILD_TIME_LDFLAGS}"
+        
+        if [ -n "${{ inputs.ldflags }}" ]; then
+          FULL_LDFLAGS="${FULL_LDFLAGS} ${{ inputs.ldflags }}"
+        fi
+        
+        # Build command
+        BUILD_CMD="go build"
+        
+        if [ -n "${{ inputs.build-tags }}" ]; then
+          BUILD_CMD="${BUILD_CMD} -tags '${{ inputs.build-tags }}'"
+        fi
+        
+        BUILD_CMD="${BUILD_CMD} -ldflags '${FULL_LDFLAGS}' -o '${OUTPUT_PATH}' ${{ inputs.source-path }}"
+        
+        echo "Executing build command:"
+        echo "${BUILD_CMD}"
+        
+        # Record start time
+        START_TIME=$(date +%s)
+        
+        # Execute build
+        eval "${BUILD_CMD}"
+        BUILD_EXIT_CODE=$?
+        
+        # Record end time
+        END_TIME=$(date +%s)
+        BUILD_TIME=$((END_TIME - START_TIME))
+        
+        if [ $BUILD_EXIT_CODE -eq 0 ]; then
+          echo "✅ Build completed successfully"
+          
+          # Get binary size
+          BINARY_SIZE=$(stat -c%s "${OUTPUT_PATH}" 2>/dev/null || stat -f%z "${OUTPUT_PATH}" 2>/dev/null || echo "unknown")
+          
+          # Set outputs
+          echo "binary-path=${OUTPUT_PATH}" >> $GITHUB_OUTPUT
+          echo "binary-size=${BINARY_SIZE}" >> $GITHUB_OUTPUT
+          echo "build-time=${BUILD_TIME}" >> $GITHUB_OUTPUT
+          
+          echo "Build details:"
+          echo "- Binary path: ${OUTPUT_PATH}"
+          echo "- Binary size: ${BINARY_SIZE} bytes"
+          echo "- Build time: ${BUILD_TIME} seconds"
+          
+          # Verify binary
+          if [ -f "${OUTPUT_PATH}" ]; then
+            echo "✅ Binary file created successfully"
+            ls -la "${OUTPUT_PATH}"
+          else
+            echo "❌ Binary file not found after build"
+            exit 1
+          fi
+        else
+          echo "❌ Build failed with exit code: $BUILD_EXIT_CODE"
+          exit $BUILD_EXIT_CODE
+        fi
+
+    - name: Test binary
+      shell: bash
+      run: |
+        BINARY_PATH="${{ steps.build.outputs.binary-path }}"
+        
+        if [ -f "${BINARY_PATH}" ]; then
+          echo "Testing built binary..."
+          
+          # Make binary executable
+          chmod +x "${BINARY_PATH}"
+          
+          # For non-Windows binaries, try to get version info
+          if [ "${{ inputs.goos }}" != "windows" ] && [ "${{ inputs.goos }}" = "$(go env GOOS)" ] && [ "${{ inputs.goarch }}" = "$(go env GOARCH)" ]; then
+            echo "Running version check on native binary..."
+            if "${BINARY_PATH}" --version 2>/dev/null || "${BINARY_PATH}" -version 2>/dev/null || "${BINARY_PATH}" version 2>/dev/null; then
+              echo "✅ Binary version check passed"
+            else
+              echo "ℹ️ Binary doesn't support version flag (this is normal)"
+            fi
+          else
+            echo "ℹ️ Skipping binary test (cross-compiled or different architecture)"
+          fi
+          
+          echo "✅ Binary validation completed"
+        else
+          echo "❌ Binary not found for testing"
+          exit 1
+        fi
+
+    - name: Generate build summary
+      shell: bash
+      run: |
+        echo "## Binary Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+        echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Target OS | ${{ inputs.goos }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Target Arch | ${{ inputs.goarch }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Binary Name | ${{ inputs.binary-name }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Output Path | ${{ steps.build.outputs.binary-path }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Binary Size | ${{ steps.build.outputs.binary-size }} bytes |" >> $GITHUB_STEP_SUMMARY
+        echo "| Build Time | ${{ steps.build.outputs.build-time }} seconds |" >> $GITHUB_STEP_SUMMARY
+        echo "| Version | ${{ inputs.version }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Commit | ${{ inputs.commit }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| CGO Enabled | ${{ inputs.cgo-enabled }} |" >> $GITHUB_STEP_SUMMARY
+        
+        if [ -n "${{ inputs.build-tags }}" ]; then
+          echo "| Build Tags | ${{ inputs.build-tags }} |" >> $GITHUB_STEP_SUMMARY
+        fi

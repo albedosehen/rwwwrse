@@ -1,0 +1,458 @@
+name: 'Comprehensive Audit Logger'
+description: 'Structured logging and audit trail system for CI/CD pipeline operations'
+
+inputs:
+  operation:
+    description: 'Operation being logged (deployment, build, test, security, etc.)'
+    required: true
+  event-type:
+    description: 'Type of event (start, progress, success, failure, warning)'
+    required: true
+  environment:
+    description: 'Target environment'
+    required: true
+  correlation-id:
+    description: 'Correlation ID for tracking across operations'
+    required: false
+  log-level:
+    description: 'Log level (debug, info, warn, error, critical)'
+    required: false
+    default: 'info'
+  audit-data:
+    description: 'Additional audit data as JSON'
+    required: false
+    default: '{}'
+  sensitive-data-mask:
+    description: 'Enable masking of sensitive data'
+    required: false
+    default: 'true'
+  retention-days:
+    description: 'Log retention period in days'
+    required: false
+    default: '90'
+  log-aggregation-endpoint:
+    description: 'External log aggregation endpoint'
+    required: false
+  compliance-mode:
+    description: 'Enable compliance logging mode'
+    required: false
+    default: 'false'
+
+outputs:
+  log-id:
+    description: 'Unique identifier for this log entry'
+    value: ${{ steps.logger.outputs.log-id }}
+  audit-trail-id:
+    description: 'Audit trail identifier'
+    value: ${{ steps.logger.outputs.audit-trail-id }}
+  log-location:
+    description: 'Location where logs are stored'
+    value: ${{ steps.logger.outputs.log-location }}
+
+runs:
+  using: 'composite'
+  steps:
+  - name: Setup logging context
+    id: setup
+    shell: bash
+    run: |
+      echo "Setting up logging and audit context..."
+      
+      # Generate correlation ID if not provided
+      if [ -z "${{ inputs.correlation-id }}" ]; then
+        CORRELATION_ID="audit-$(date +%s)-$(uuidgen | cut -d'-' -f1)"
+      else
+        CORRELATION_ID="${{ inputs.correlation-id }}"
+      fi
+      
+      # Generate unique log ID
+      LOG_ID="log-$(date +%s%N)-$(uuidgen | cut -d'-' -f1)"
+      
+      # Generate audit trail ID
+      AUDIT_TRAIL_ID="audit-trail-$(date +%Y%m%d)-${{ inputs.environment }}-${{ inputs.operation }}"
+      
+      echo "correlation-id=$CORRELATION_ID" >> $GITHUB_OUTPUT
+      echo "log-id=$LOG_ID" >> $GITHUB_OUTPUT
+      echo "audit-trail-id=$AUDIT_TRAIL_ID" >> $GITHUB_OUTPUT
+      
+      echo "CORRELATION_ID=$CORRELATION_ID" >> $GITHUB_ENV
+      echo "LOG_ID=$LOG_ID" >> $GITHUB_ENV
+      echo "AUDIT_TRAIL_ID=$AUDIT_TRAIL_ID" >> $GITHUB_ENV
+      
+      # Setup logging directories
+      mkdir -p .audit/{logs,trails,compliance,structured}
+      
+      # Create log metadata
+      cat > .audit/metadata.json << EOF
+      {
+        "log_id": "$LOG_ID",
+        "correlation_id": "$CORRELATION_ID",
+        "audit_trail_id": "$AUDIT_TRAIL_ID",
+        "operation": "${{ inputs.operation }}",
+        "environment": "${{ inputs.environment }}",
+        "log_level": "${{ inputs.log-level }}",
+        "compliance_mode": "${{ inputs.compliance-mode }}",
+        "retention_days": ${{ inputs.retention-days }},
+        "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+        "workflow": {
+          "repository": "${{ github.repository }}",
+          "run_id": "${{ github.run_id }}",
+          "actor": "${{ github.actor }}",
+          "ref": "${{ github.ref }}",
+          "sha": "${{ github.sha }}"
+        }
+      }
+      EOF
+      
+      echo "✅ Logging context initialized"
+      echo "Log ID: $LOG_ID"
+      echo "Correlation ID: $CORRELATION_ID"
+      echo "Audit Trail ID: $AUDIT_TRAIL_ID"
+
+  - name: Validate and sanitize input data
+    id: sanitize
+    shell: bash
+    run: |
+      echo "Validating and sanitizing input data..."
+      
+      # Parse audit data
+      AUDIT_DATA='${{ inputs.audit-data }}'
+      
+      # Sanitize sensitive data if masking is enabled
+      if [ "${{ inputs.sensitive-data-mask }}" = "true" ]; then
+        echo "🔒 Masking sensitive data..."
+        
+        # Mask common sensitive patterns
+        SANITIZED_DATA=$(echo "$AUDIT_DATA" | \
+          sed 's/"password":\s*"[^"]*"/"password": "***MASKED***"/g' | \
+          sed 's/"token":\s*"[^"]*"/"token": "***MASKED***"/g' | \
+          sed 's/"secret":\s*"[^"]*"/"secret": "***MASKED***"/g' | \
+          sed 's/"key":\s*"[^"]*"/"key": "***MASKED***"/g' | \
+          sed 's/"api_key":\s*"[^"]*"/"api_key": "***MASKED***"/g')
+        
+        echo "sanitized-data=$SANITIZED_DATA" >> $GITHUB_OUTPUT
+        echo "SANITIZED_DATA=$SANITIZED_DATA" >> $GITHUB_ENV
+      else
+        echo "sanitized-data=$AUDIT_DATA" >> $GITHUB_OUTPUT
+        echo "SANITIZED_DATA=$AUDIT_DATA" >> $GITHUB_ENV
+      fi
+      
+      echo "✅ Data validation and sanitization completed"
+
+  - name: Create structured log entry
+    id: logger
+    shell: bash
+    run: |
+      echo "Creating structured log entry..."
+      
+      TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+      UNIX_TIMESTAMP=$(date +%s)
+      
+      # Create structured log entry
+      cat > .audit/structured/log-entry.json << EOF
+      {
+        "timestamp": "$TIMESTAMP",
+        "unix_timestamp": $UNIX_TIMESTAMP,
+        "log_id": "$LOG_ID",
+        "correlation_id": "$CORRELATION_ID",
+        "audit_trail_id": "$AUDIT_TRAIL_ID",
+        "level": "${{ inputs.log-level }}",
+        "operation": "${{ inputs.operation }}",
+        "event_type": "${{ inputs.event-type }}",
+        "environment": "${{ inputs.environment }}",
+        "source": "github-actions",
+        "workflow_context": {
+          "repository": "${{ github.repository }}",
+          "run_id": "${{ github.run_id }}",
+          "run_number": "${{ github.run_number }}",
+          "job": "${{ github.job }}",
+          "actor": "${{ github.actor }}",
+          "ref": "${{ github.ref }}",
+          "ref_name": "${{ github.ref_name }}",
+          "sha": "${{ github.sha }}",
+          "event_name": "${{ github.event_name }}",
+          "server_url": "${{ github.server_url }}"
+        },
+        "system_context": {
+          "runner_os": "${{ runner.os }}",
+          "runner_arch": "${{ runner.arch }}",
+          "runner_name": "${{ runner.name }}"
+        },
+        "audit_data": $SANITIZED_DATA,
+        "compliance": {
+          "mode": "${{ inputs.compliance-mode }}",
+          "retention_days": ${{ inputs.retention-days }},
+          "data_classification": "internal"
+        }
+      }
+      EOF
+      
+      # Create human-readable log entry
+      cat > .audit/logs/readable.log << EOF
+      [$TIMESTAMP] [${{ inputs.log-level }}] [${{ inputs.operation }}] ${{ inputs.event-type }}
+      Environment: ${{ inputs.environment }}
+      Correlation ID: $CORRELATION_ID
+      Log ID: $LOG_ID
+      Actor: ${{ github.actor }}
+      Repository: ${{ github.repository }}
+      Workflow Run: ${{ github.run_id }}
+      
+      EOF
+      
+      # Append audit data if present
+      if [ "$SANITIZED_DATA" != "{}" ]; then
+        echo "Audit Data:" >> .audit/logs/readable.log
+        echo "$SANITIZED_DATA" | jq . >> .audit/logs/readable.log 2>/dev/null || echo "$SANITIZED_DATA" >> .audit/logs/readable.log
+        echo "" >> .audit/logs/readable.log
+      fi
+      
+      echo "---" >> .audit/logs/readable.log
+      
+      # Set outputs
+      echo "log-id=$LOG_ID" >> $GITHUB_OUTPUT
+      echo "audit-trail-id=$AUDIT_TRAIL_ID" >> $GITHUB_OUTPUT
+      echo "log-location=.audit/structured/log-entry.json" >> $GITHUB_OUTPUT
+      
+      echo "✅ Structured log entry created"
+
+  - name: Update audit trail
+    id: audit-trail
+    shell: bash
+    run: |
+      echo "Updating audit trail..."
+      
+      TRAIL_FILE=".audit/trails/${AUDIT_TRAIL_ID}.jsonl"
+      
+      # Create audit trail entry (JSONL format for streaming)
+      cat >> "$TRAIL_FILE" << EOF
+      {"timestamp":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","log_id":"$LOG_ID","operation":"${{ inputs.operation }}","event_type":"${{ inputs.event-type }}","environment":"${{ inputs.environment }}","level":"${{ inputs.log-level }}","actor":"${{ github.actor }}","run_id":"${{ github.run_id }}"}
+      EOF
+      
+      # Create audit trail summary
+      ENTRY_COUNT=$(wc -l < "$TRAIL_FILE" 2>/dev/null || echo "1")
+      
+      cat > ".audit/trails/${AUDIT_TRAIL_ID}-summary.json" << EOF
+      {
+        "audit_trail_id": "$AUDIT_TRAIL_ID",
+        "operation": "${{ inputs.operation }}",
+        "environment": "${{ inputs.environment }}",
+        "entry_count": $ENTRY_COUNT,
+        "first_entry": "$(head -1 "$TRAIL_FILE" 2>/dev/null | jq -r '.timestamp' 2>/dev/null || echo 'unknown')",
+        "last_entry": "$(tail -1 "$TRAIL_FILE" 2>/dev/null | jq -r '.timestamp' 2>/dev/null || echo 'unknown')",
+        "actors": ["${{ github.actor }}"],
+        "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      }
+      EOF
+      
+      echo "✅ Audit trail updated (entry #$ENTRY_COUNT)"
+
+  - name: Compliance logging
+    id: compliance
+    if: inputs.compliance-mode == 'true'
+    shell: bash
+    run: |
+      echo "Creating compliance log entries..."
+      
+      # Create compliance-specific log entry
+      cat > .audit/compliance/compliance-entry.json << EOF
+      {
+        "compliance_log_id": "comp-$LOG_ID",
+        "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+        "log_id": "$LOG_ID",
+        "correlation_id": "$CORRELATION_ID",
+        "operation": "${{ inputs.operation }}",
+        "event_type": "${{ inputs.event-type }}",
+        "environment": "${{ inputs.environment }}",
+        "actor": "${{ github.actor }}",
+        "actor_type": "github_user",
+        "action_taken": "${{ inputs.operation }}-${{ inputs.event-type }}",
+        "resource_affected": "${{ inputs.environment }}",
+        "authorization_context": {
+          "repository": "${{ github.repository }}",
+          "ref": "${{ github.ref }}",
+          "permissions": "workflow_execution"
+        },
+        "data_classification": "internal",
+        "retention_policy": {
+          "retention_days": ${{ inputs.retention-days }},
+          "deletion_date": "$(date -d '+${{ inputs.retention-days }} days' -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)"
+        },
+        "integrity": {
+          "checksum": "$(echo -n "$LOG_ID$CORRELATION_ID${{ inputs.operation }}" | sha256sum | cut -d' ' -f1)",
+          "version": "1.0"
+        }
+      }
+      EOF
+      
+      echo "🏛️ Compliance log entry created"
+
+  - name: Send logs to external aggregation
+    id: external-logging
+    if: inputs.log-aggregation-endpoint != ''
+    shell: bash
+    run: |
+      echo "Sending logs to external aggregation system..."
+      
+      # Prepare log payload for external system
+      cat > .audit/external-payload.json << EOF
+      {
+        "source": "github-actions-audit",
+        "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+        "log_entry": $(cat .audit/structured/log-entry.json),
+        "metadata": $(cat .audit/metadata.json)
+      }
+      EOF
+      
+      # Send to external endpoint
+      if curl -X POST \
+        -H "Content-Type: application/json" \
+        -H "X-Log-Source: github-actions" \
+        -H "X-Correlation-ID: $CORRELATION_ID" \
+        -d @.audit/external-payload.json \
+        "${{ inputs.log-aggregation-endpoint }}" \
+        --max-time 30 \
+        --retry 3 \
+        --retry-delay 5; then
+        echo "✅ Logs sent to external aggregation system"
+        echo "external-sent=true" >> $GITHUB_OUTPUT
+      else
+        echo "❌ Failed to send logs to external system"
+        echo "external-sent=false" >> $GITHUB_OUTPUT
+      fi
+
+  - name: Create log retention policy
+    id: retention
+    shell: bash
+    run: |
+      echo "Creating log retention policy..."
+      
+      RETENTION_DAYS=${{ inputs.retention-days }}
+      DELETION_DATE=$(date -d "+${RETENTION_DAYS} days" -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
+      
+      cat > .audit/retention-policy.json << EOF
+      {
+        "log_id": "$LOG_ID",
+        "audit_trail_id": "$AUDIT_TRAIL_ID",
+        "retention_days": $RETENTION_DAYS,
+        "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+        "deletion_date": "$DELETION_DATE",
+        "policy_version": "1.0",
+        "compliance_requirements": {
+          "gdpr_compliant": true,
+          "data_classification": "internal",
+          "encryption_required": false
+        },
+        "archival": {
+          "archive_after_days": $((RETENTION_DAYS - 30)),
+          "archive_location": "cold_storage",
+          "compression": true
+        }
+      }
+      EOF
+      
+      echo "📅 Log retention policy created (${RETENTION_DAYS} days)"
+
+  - name: Generate log analytics
+    id: analytics
+    shell: bash
+    run: |
+      echo "Generating log analytics..."
+      
+      # Count log entries by level
+      DEBUG_COUNT=0
+      INFO_COUNT=0
+      WARN_COUNT=0
+      ERROR_COUNT=0
+      CRITICAL_COUNT=0
+      
+      # Simple analytics based on current log level
+      case "${{ inputs.log-level }}" in
+        "debug") DEBUG_COUNT=1 ;;
+        "info") INFO_COUNT=1 ;;
+        "warn") WARN_COUNT=1 ;;
+        "error") ERROR_COUNT=1 ;;
+        "critical") CRITICAL_COUNT=1 ;;
+      esac
+      
+      # Create analytics summary
+      cat > .audit/analytics.json << EOF
+      {
+        "analytics_id": "analytics-$LOG_ID",
+        "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+        "period": "current_session",
+        "operation": "${{ inputs.operation }}",
+        "environment": "${{ inputs.environment }}",
+        "log_counts": {
+          "debug": $DEBUG_COUNT,
+          "info": $INFO_COUNT,
+          "warn": $WARN_COUNT,
+          "error": $ERROR_COUNT,
+          "critical": $CRITICAL_COUNT,
+          "total": 1
+        },
+        "event_types": {
+          "${{ inputs.event-type }}": 1
+        },
+        "actors": {
+          "${{ github.actor }}": 1
+        },
+        "repositories": {
+          "${{ github.repository }}": 1
+        }
+      }
+      EOF
+      
+      echo "📊 Log analytics generated"
+
+  - name: Create audit summary
+    if: always()
+    shell: bash
+    run: |
+      echo "## Comprehensive Audit Log Summary" >> $GITHUB_STEP_SUMMARY
+      echo "" >> $GITHUB_STEP_SUMMARY
+      echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+      echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+      echo "| Log ID | $LOG_ID |" >> $GITHUB_STEP_SUMMARY
+      echo "| Correlation ID | $CORRELATION_ID |" >> $GITHUB_STEP_SUMMARY
+      echo "| Audit Trail ID | $AUDIT_TRAIL_ID |" >> $GITHUB_STEP_SUMMARY
+      echo "| Operation | ${{ inputs.operation }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Event Type | ${{ inputs.event-type }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Environment | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Log Level | ${{ inputs.log-level }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Compliance Mode | ${{ inputs.compliance-mode }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Retention Days | ${{ inputs.retention-days }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Sensitive Data Masked | ${{ inputs.sensitive-data-mask }} |" >> $GITHUB_STEP_SUMMARY
+      
+      if [ "${{ steps.external-logging.outputs.external-sent }}" = "true" ]; then
+        echo "| External Aggregation | ✅ Sent |" >> $GITHUB_STEP_SUMMARY
+      elif [ "${{ inputs.log-aggregation-endpoint }}" != "" ]; then
+        echo "| External Aggregation | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
+      else
+        echo "| External Aggregation | ⏭️ Not Configured |" >> $GITHUB_STEP_SUMMARY
+      fi
+      
+      echo "" >> $GITHUB_STEP_SUMMARY
+      echo "### 📋 Audit Trail Information" >> $GITHUB_STEP_SUMMARY
+      echo "- **Log Location**: \`.audit/structured/log-entry.json\`" >> $GITHUB_STEP_SUMMARY
+      echo "- **Audit Trail**: \`.audit/trails/${AUDIT_TRAIL_ID}.jsonl\`" >> $GITHUB_STEP_SUMMARY
+      echo "- **Retention Policy**: \`.audit/retention-policy.json\`" >> $GITHUB_STEP_SUMMARY
+      
+      if [ "${{ inputs.compliance-mode }}" = "true" ]; then
+        echo "- **Compliance Log**: \`.audit/compliance/compliance-entry.json\`" >> $GITHUB_STEP_SUMMARY
+      fi
+      
+      echo "" >> $GITHUB_STEP_SUMMARY
+      echo "### 🔍 Log Entry Details" >> $GITHUB_STEP_SUMMARY
+      echo "- **Timestamp**: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_STEP_SUMMARY
+      echo "- **Actor**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+      echo "- **Repository**: ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+      echo "- **Workflow Run**: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
+      
+      if [ "${{ inputs.audit-data }}" != "{}" ]; then
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📊 Additional Audit Data" >> $GITHUB_STEP_SUMMARY
+        echo "Additional audit information has been logged and is available in the structured log files." >> $GITHUB_STEP_SUMMARY
+      fi
+      
+      echo "" >> $GITHUB_STEP_SUMMARY
+      echo "✅ **Comprehensive audit logging completed successfully.**" >> $GITHUB_STEP_SUMMARY

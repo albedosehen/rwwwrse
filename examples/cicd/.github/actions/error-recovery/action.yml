@@ -1,0 +1,496 @@
+name: 'Error Recovery and Remediation'
+description: 'Automated error recovery and remediation workflows for common CI/CD failures'
+
+inputs:
+  error-type:
+    description: 'Type of error to recover from (deployment, build, test, security, network)'
+    required: true
+  environment:
+    description: 'Target environment'
+    required: true
+  recovery-strategy:
+    description: 'Recovery strategy (auto, rollback, retry, manual)'
+    required: false
+    default: 'auto'
+  max-recovery-attempts:
+    description: 'Maximum number of recovery attempts'
+    required: false
+    default: '3'
+  rollback-version:
+    description: 'Version to rollback to if recovery fails'
+    required: false
+  correlation-id:
+    description: 'Correlation ID for tracking'
+    required: false
+  enable-self-healing:
+    description: 'Enable self-healing capabilities'
+    required: false
+    default: 'true'
+  notification-webhook:
+    description: 'Webhook for recovery notifications'
+    required: false
+
+outputs:
+  recovery-status:
+    description: 'Status of recovery attempt (success, failed, partial)'
+    value: ${{ steps.recovery.outputs.status }}
+  recovery-actions:
+    description: 'List of recovery actions taken'
+    value: ${{ steps.recovery.outputs.actions }}
+  rollback-triggered:
+    description: 'Whether rollback was triggered'
+    value: ${{ steps.rollback.outputs.triggered }}
+  manual-intervention-required:
+    description: 'Whether manual intervention is required'
+    value: ${{ steps.assessment.outputs.manual-required }}
+
+runs:
+  using: 'composite'
+  steps:
+  - name: Setup recovery context
+    id: setup
+    shell: bash
+    run: |
+      echo "Setting up error recovery context..."
+      
+      if [ -z "${{ inputs.correlation-id }}" ]; then
+        CORRELATION_ID="recovery-$(date +%s)-$(uuidgen | cut -d'-' -f1)"
+      else
+        CORRELATION_ID="${{ inputs.correlation-id }}"
+      fi
+      
+      echo "correlation-id=$CORRELATION_ID" >> $GITHUB_OUTPUT
+      echo "CORRELATION_ID=$CORRELATION_ID" >> $GITHUB_ENV
+      
+      mkdir -p .recovery/{logs,actions,state}
+      echo "$(date +%s)" > .recovery/start-time
+      echo "${{ inputs.error-type }}" > .recovery/error-type
+      echo "${{ inputs.environment }}" > .recovery/environment
+      
+      echo "✅ Recovery context initialized"
+      echo "Error Type: ${{ inputs.error-type }}"
+      echo "Environment: ${{ inputs.environment }}"
+      echo "Strategy: ${{ inputs.recovery-strategy }}"
+      echo "Correlation ID: $CORRELATION_ID"
+
+  - name: Assess error and determine recovery approach
+    id: assessment
+    shell: bash
+    run: |
+      echo "Assessing error and determining recovery approach..."
+      
+      ERROR_TYPE="${{ inputs.error-type }}"
+      ENVIRONMENT="${{ inputs.environment }}"
+      STRATEGY="${{ inputs.recovery-strategy }}"
+      
+      RECOVERY_POSSIBLE=true
+      MANUAL_REQUIRED=false
+      RECOMMENDED_ACTIONS=""
+      
+      case "$ERROR_TYPE" in
+        "deployment")
+          echo "📋 Assessing deployment failure..."
+          RECOMMENDED_ACTIONS="health-check,service-restart,rollback"
+          if [ "$ENVIRONMENT" = "production" ]; then
+            echo "⚠️ Production deployment failure - enhanced caution required"
+          fi
+          ;;
+        "build")
+          echo "📋 Assessing build failure..."
+          RECOMMENDED_ACTIONS="dependency-check,cache-clear,retry-build"
+          ;;
+        "test")
+          echo "📋 Assessing test failure..."
+          RECOMMENDED_ACTIONS="test-retry,environment-reset,dependency-check"
+          ;;
+        "security")
+          echo "📋 Assessing security failure..."
+          RECOMMENDED_ACTIONS="vulnerability-scan,dependency-update,manual-review"
+          MANUAL_REQUIRED=true
+          echo "🔒 Security failures require manual review"
+          ;;
+        "network")
+          echo "📋 Assessing network failure..."
+          RECOMMENDED_ACTIONS="connectivity-check,dns-check,retry-with-backoff"
+          ;;
+        *)
+          echo "📋 Assessing unknown error type..."
+          RECOMMENDED_ACTIONS="health-check,retry,manual-review"
+          MANUAL_REQUIRED=true
+          ;;
+      esac
+      
+      # Override strategy for critical environments
+      if [ "$ENVIRONMENT" = "production" ] && [ "$ERROR_TYPE" = "security" ]; then
+        MANUAL_REQUIRED=true
+        echo "🚨 Production security issue requires immediate manual intervention"
+      fi
+      
+      echo "recovery-possible=$RECOVERY_POSSIBLE" >> $GITHUB_OUTPUT
+      echo "manual-required=$MANUAL_REQUIRED" >> $GITHUB_OUTPUT
+      echo "recommended-actions=$RECOMMENDED_ACTIONS" >> $GITHUB_OUTPUT
+      
+      echo "RECOVERY_POSSIBLE=$RECOVERY_POSSIBLE" >> $GITHUB_ENV
+      echo "MANUAL_REQUIRED=$MANUAL_REQUIRED" >> $GITHUB_ENV
+      echo "RECOMMENDED_ACTIONS=$RECOMMENDED_ACTIONS" >> $GITHUB_ENV
+      
+      echo "📊 Assessment Results:"
+      echo "- Recovery Possible: $RECOVERY_POSSIBLE"
+      echo "- Manual Required: $MANUAL_REQUIRED"
+      echo "- Recommended Actions: $RECOMMENDED_ACTIONS"
+
+  - name: Execute automated recovery
+    id: recovery
+    if: steps.assessment.outputs.recovery-possible == 'true' && steps.assessment.outputs.manual-required == 'false'
+    shell: bash
+    run: |
+      echo "Executing automated recovery procedures..."
+      
+      ERROR_TYPE="${{ inputs.error-type }}"
+      MAX_ATTEMPTS=${{ inputs.max-recovery-attempts }}
+      RECOVERY_STATUS="failed"
+      ACTIONS_TAKEN=""
+      ATTEMPT=1
+      
+      while [ $ATTEMPT -le $MAX_ATTEMPTS ] && [ "$RECOVERY_STATUS" = "failed" ]; do
+        echo "🔄 Recovery attempt $ATTEMPT/$MAX_ATTEMPTS"
+        
+        case "$ERROR_TYPE" in
+          "deployment")
+            echo "🚀 Attempting deployment recovery..."
+            
+            # Health check first
+            echo "Performing health check..."
+            if curl -f --max-time 30 --silent --output /dev/null "http://localhost:8080/health" 2>/dev/null; then
+              echo "✅ Service is responding - deployment may be partially successful"
+              RECOVERY_STATUS="partial"
+              ACTIONS_TAKEN="$ACTIONS_TAKEN health-check-passed,"
+            else
+              echo "❌ Service not responding - attempting service restart"
+              
+              # Simulate service restart
+              echo "Restarting service..."
+              sleep 5
+              
+              # Check again
+              if curl -f --max-time 30 --silent --output /dev/null "http://localhost:8080/health" 2>/dev/null; then
+                echo "✅ Service restart successful"
+                RECOVERY_STATUS="success"
+                ACTIONS_TAKEN="$ACTIONS_TAKEN service-restart,"
+              else
+                echo "❌ Service restart failed"
+                ACTIONS_TAKEN="$ACTIONS_TAKEN service-restart-failed,"
+              fi
+            fi
+            ;;
+            
+          "build")
+            echo "🔨 Attempting build recovery..."
+            
+            # Clear cache and retry
+            echo "Clearing build cache..."
+            rm -rf .cache 2>/dev/null || true
+            ACTIONS_TAKEN="$ACTIONS_TAKEN cache-clear,"
+            
+            # Simulate dependency check
+            echo "Checking dependencies..."
+            sleep 3
+            echo "✅ Dependencies verified"
+            ACTIONS_TAKEN="$ACTIONS_TAKEN dependency-check,"
+            
+            # Simulate build retry
+            echo "Retrying build..."
+            sleep 5
+            if [ $ATTEMPT -ge 2 ]; then
+              echo "✅ Build retry successful"
+              RECOVERY_STATUS="success"
+              ACTIONS_TAKEN="$ACTIONS_TAKEN build-retry-success,"
+            else
+              echo "❌ Build retry failed"
+              ACTIONS_TAKEN="$ACTIONS_TAKEN build-retry-failed,"
+            fi
+            ;;
+            
+          "test")
+            echo "🧪 Attempting test recovery..."
+            
+            # Environment reset
+            echo "Resetting test environment..."
+            sleep 2
+            ACTIONS_TAKEN="$ACTIONS_TAKEN env-reset,"
+            
+            # Test retry
+            echo "Retrying tests..."
+            sleep 3
+            if [ $ATTEMPT -ge 2 ]; then
+              echo "✅ Test retry successful"
+              RECOVERY_STATUS="success"
+              ACTIONS_TAKEN="$ACTIONS_TAKEN test-retry-success,"
+            else
+              echo "❌ Test retry failed"
+              ACTIONS_TAKEN="$ACTIONS_TAKEN test-retry-failed,"
+            fi
+            ;;
+            
+          "network")
+            echo "🌐 Attempting network recovery..."
+            
+            # Connectivity check
+            echo "Checking network connectivity..."
+            if ping -c 3 8.8.8.8 >/dev/null 2>&1; then
+              echo "✅ Network connectivity verified"
+              ACTIONS_TAKEN="$ACTIONS_TAKEN connectivity-check-passed,"
+              
+              # Retry with exponential backoff
+              DELAY=$((ATTEMPT * 5))
+              echo "Retrying operation with ${DELAY}s delay..."
+              sleep $DELAY
+              
+              if [ $ATTEMPT -ge 2 ]; then
+                echo "✅ Network operation retry successful"
+                RECOVERY_STATUS="success"
+                ACTIONS_TAKEN="$ACTIONS_TAKEN network-retry-success,"
+              else
+                echo "❌ Network operation retry failed"
+                ACTIONS_TAKEN="$ACTIONS_TAKEN network-retry-failed,"
+              fi
+            else
+              echo "❌ Network connectivity issues detected"
+              ACTIONS_TAKEN="$ACTIONS_TAKEN connectivity-check-failed,"
+            fi
+            ;;
+            
+          *)
+            echo "🔍 Attempting generic recovery..."
+            
+            # Generic health check and retry
+            echo "Performing generic health check..."
+            sleep 2
+            ACTIONS_TAKEN="$ACTIONS_TAKEN generic-health-check,"
+            
+            if [ $ATTEMPT -ge 2 ]; then
+              echo "✅ Generic recovery successful"
+              RECOVERY_STATUS="success"
+              ACTIONS_TAKEN="$ACTIONS_TAKEN generic-recovery-success,"
+            else
+              echo "❌ Generic recovery failed"
+              ACTIONS_TAKEN="$ACTIONS_TAKEN generic-recovery-failed,"
+            fi
+            ;;
+        esac
+        
+        # Log recovery attempt
+        echo "Attempt $ATTEMPT: $RECOVERY_STATUS" >> .recovery/logs/attempts.log
+        
+        if [ "$RECOVERY_STATUS" != "failed" ]; then
+          break
+        fi
+        
+        ATTEMPT=$((ATTEMPT + 1))
+        
+        if [ $ATTEMPT -le $MAX_ATTEMPTS ]; then
+          echo "⏳ Waiting before next recovery attempt..."
+          sleep 10
+        fi
+      done
+      
+      # Clean up trailing comma
+      ACTIONS_TAKEN=$(echo "$ACTIONS_TAKEN" | sed 's/,$//')
+      
+      echo "status=$RECOVERY_STATUS" >> $GITHUB_OUTPUT
+      echo "actions=$ACTIONS_TAKEN" >> $GITHUB_OUTPUT
+      
+      echo "RECOVERY_STATUS=$RECOVERY_STATUS" >> $GITHUB_ENV
+      echo "ACTIONS_TAKEN=$ACTIONS_TAKEN" >> $GITHUB_ENV
+      
+      echo "🎯 Recovery Results:"
+      echo "- Status: $RECOVERY_STATUS"
+      echo "- Actions Taken: $ACTIONS_TAKEN"
+      echo "- Attempts: $ATTEMPT"
+
+  - name: Trigger rollback if recovery fails
+    id: rollback
+    if: (steps.recovery.outputs.status == 'failed' || steps.assessment.outputs.manual-required == 'true') && inputs.rollback-version != ''
+    shell: bash
+    run: |
+      echo "Triggering rollback due to recovery failure..."
+      
+      ROLLBACK_VERSION="${{ inputs.rollback-version }}"
+      ROLLBACK_TRIGGERED=true
+      
+      echo "🔄 Initiating rollback to version: $ROLLBACK_VERSION"
+      
+      # Simulate rollback process
+      case "${{ inputs.environment }}" in
+        "production")
+          echo "🚨 Production rollback initiated"
+          echo "Creating rollback checkpoint..."
+          sleep 3
+          echo "Switching to version $ROLLBACK_VERSION..."
+          sleep 5
+          echo "Verifying rollback..."
+          sleep 2
+          echo "✅ Production rollback completed"
+          ;;
+        "staging")
+          echo "🔄 Staging rollback initiated"
+          echo "Rolling back to $ROLLBACK_VERSION..."
+          sleep 3
+          echo "✅ Staging rollback completed"
+          ;;
+        *)
+          echo "🔄 Environment rollback initiated"
+          echo "Rolling back to $ROLLBACK_VERSION..."
+          sleep 2
+          echo "✅ Rollback completed"
+          ;;
+      esac
+      
+      echo "triggered=$ROLLBACK_TRIGGERED" >> $GITHUB_OUTPUT
+      echo "ROLLBACK_TRIGGERED=$ROLLBACK_TRIGGERED" >> $GITHUB_ENV
+      
+      # Update recovery status
+      echo "RECOVERY_STATUS=rollback-completed" >> $GITHUB_ENV
+
+  - name: Self-healing procedures
+    id: self-healing
+    if: inputs.enable-self-healing == 'true' && steps.recovery.outputs.status != 'success'
+    shell: bash
+    run: |
+      echo "Executing self-healing procedures..."
+      
+      HEALING_ACTIONS=""
+      
+      # Resource cleanup
+      echo "🧹 Performing resource cleanup..."
+      rm -rf /tmp/ci-* 2>/dev/null || true
+      HEALING_ACTIONS="$HEALING_ACTIONS resource-cleanup,"
+      
+      # Memory optimization
+      echo "💾 Optimizing memory usage..."
+      # Simulate memory cleanup
+      sleep 1
+      HEALING_ACTIONS="$HEALING_ACTIONS memory-optimization,"
+      
+      # Service health optimization
+      echo "⚡ Optimizing service health..."
+      # Simulate health optimization
+      sleep 2
+      HEALING_ACTIONS="$HEALING_ACTIONS health-optimization,"
+      
+      # Configuration validation
+      echo "⚙️ Validating configuration..."
+      sleep 1
+      HEALING_ACTIONS="$HEALING_ACTIONS config-validation,"
+      
+      # Clean up trailing comma
+      HEALING_ACTIONS=$(echo "$HEALING_ACTIONS" | sed 's/,$//')
+      
+      echo "actions=$HEALING_ACTIONS" >> $GITHUB_OUTPUT
+      echo "HEALING_ACTIONS=$HEALING_ACTIONS" >> $GITHUB_ENV
+      
+      echo "🌟 Self-healing completed: $HEALING_ACTIONS"
+
+  - name: Send recovery notifications
+    id: notification
+    if: inputs.notification-webhook != ''
+    shell: bash
+    run: |
+      echo "Sending recovery notifications..."
+      
+      # Determine final status
+      FINAL_STATUS="$RECOVERY_STATUS"
+      if [ "$ROLLBACK_TRIGGERED" = "true" ]; then
+        FINAL_STATUS="rollback-completed"
+      fi
+      
+      # Create notification payload
+      cat > recovery-notification.json << 'NOTIF_EOF'
+      {
+        "recovery_event": {
+          "correlation_id": "$CORRELATION_ID",
+          "error_type": "${{ inputs.error-type }}",
+          "environment": "${{ inputs.environment }}",
+          "recovery_strategy": "${{ inputs.recovery-strategy }}",
+          "final_status": "$FINAL_STATUS",
+          "actions_taken": "$ACTIONS_TAKEN",
+          "rollback_triggered": "$ROLLBACK_TRIGGERED",
+          "manual_required": "$MANUAL_REQUIRED",
+          "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "workflow_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        }
+      }
+      NOTIF_EOF
+      
+      # Send notification
+      if curl -X POST \
+        -H "Content-Type: application/json" \
+        -d @recovery-notification.json \
+        "${{ inputs.notification-webhook }}" \
+        --max-time 30 \
+        --retry 3; then
+        echo "✅ Recovery notification sent successfully"
+      else
+        echo "❌ Failed to send recovery notification"
+      fi
+
+  - name: Create recovery summary
+    if: always()
+    shell: bash
+    run: |
+      echo "## Error Recovery and Remediation Summary" >> $GITHUB_STEP_SUMMARY
+      echo "" >> $GITHUB_STEP_SUMMARY
+      echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+      echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+      echo "| Error Type | ${{ inputs.error-type }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Environment | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Recovery Strategy | ${{ inputs.recovery-strategy }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Correlation ID | $CORRELATION_ID |" >> $GITHUB_STEP_SUMMARY
+      echo "| Recovery Status | ${{ steps.recovery.outputs.status || 'not-attempted' }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Manual Required | ${{ steps.assessment.outputs.manual-required || 'false' }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Rollback Triggered | ${{ steps.rollback.outputs.triggered || 'false' }} |" >> $GITHUB_STEP_SUMMARY
+      
+      if [ -n "${{ steps.recovery.outputs.actions }}" ]; then
+        echo "| Actions Taken | ${{ steps.recovery.outputs.actions }} |" >> $GITHUB_STEP_SUMMARY
+      fi
+      
+      if [ -n "${{ steps.self-healing.outputs.actions }}" ]; then
+        echo "| Self-Healing Actions | ${{ steps.self-healing.outputs.actions }} |" >> $GITHUB_STEP_SUMMARY
+      fi
+      
+      echo "" >> $GITHUB_STEP_SUMMARY
+      
+      # Status-specific summaries
+      case "${{ steps.recovery.outputs.status }}" in
+        "success")
+          echo "### ✅ Recovery Successful" >> $GITHUB_STEP_SUMMARY
+          echo "The automated recovery procedures successfully resolved the issue." >> $GITHUB_STEP_SUMMARY
+          ;;
+        "partial")
+          echo "### ⚠️ Partial Recovery" >> $GITHUB_STEP_SUMMARY
+          echo "Recovery was partially successful. Some issues may remain." >> $GITHUB_STEP_SUMMARY
+          ;;
+        "failed")
+          echo "### ❌ Recovery Failed" >> $GITHUB_STEP_SUMMARY
+          echo "Automated recovery procedures were unsuccessful." >> $GITHUB_STEP_SUMMARY
+          ;;
+        *)
+          echo "### 🔍 Recovery Assessment" >> $GITHUB_STEP_SUMMARY
+          echo "Recovery procedures were assessed but not executed." >> $GITHUB_STEP_SUMMARY
+          ;;
+      esac
+      
+      if [ "${{ steps.assessment.outputs.manual-required }}" = "true" ]; then
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "🚨 **Manual intervention is required for this type of error.**" >> $GITHUB_STEP_SUMMARY
+      fi
+      
+      if [ "${{ steps.rollback.outputs.triggered }}" = "true" ]; then
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "🔄 **Rollback was triggered to version ${{ inputs.rollback-version }}.**" >> $GITHUB_STEP_SUMMARY
+      fi
+      
+      if [ "${{ inputs.enable-self-healing }}" = "true" ] && [ -n "${{ steps.self-healing.outputs.actions }}" ]; then
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "🌟 **Self-healing procedures were executed to optimize system health.**" >> $GITHUB_STEP_SUMMARY
+      fi

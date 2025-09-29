@@ -1,0 +1,358 @@
+name: Build & deploy to Synology
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Docker image tag (used by build + compose)"
+        type: string
+        default: "latest"
+      no_build:
+        description: "Skip local docker build step"
+        type: boolean
+        default: false
+
+concurrency:
+  group: synology-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-deploy:
+    runs-on: [ self-hosted, synology ]
+    environment: syno
+    timeout-minutes: 30
+    env:
+      IMAGE_TAG: ${{ inputs.image_tag || 'latest' }}
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
+
+    - name: Initialize submodules (if any)
+      run: |
+        echo "Initializing git submodules..."
+        git submodule update --init --recursive || echo "No submodules found or already initialized"
+
+    - name: Verify repository structure immediately after checkout
+      run: |
+        echo "=== Post-Checkout Repository Structure Verification ==="
+        echo "Current working directory: $(pwd)"
+        echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+
+        echo "Repository root contents:"
+        ls -la
+
+        echo "Checking for app directory:"
+        if [ -d "app" ]; then
+          echo "✓ app directory exists"
+          ls -la app/
+        else
+          echo "ERROR: app directory not found"
+          exit 1
+        fi
+
+        echo "Checking for app/fresh-oneiric directory:"
+        if [ -d "app/fresh-oneiric" ]; then
+          echo "✓ app/fresh-oneiric directory exists"
+          ls -la app/fresh-oneiric/
+        else
+          echo "ERROR: app/fresh-oneiric directory not found"
+          echo "Available directories in app/:"
+          find app/ -type d -maxdepth 2 2>/dev/null || echo "No subdirectories found in app/"
+          exit 1
+        fi
+
+        echo "Checking for required application files:"
+        if [ -f "app/fresh-oneiric/main.ts" ] && [ -f "app/fresh-oneiric/deno.json" ]; then
+          echo "✓ Required application files found (main.ts, deno.json)"
+        else
+          echo "ERROR: Required application files missing"
+          echo "Contents of app/fresh-oneiric/:"
+          ls -la app/fresh-oneiric/ || echo "Directory listing failed"
+          exit 1
+        fi
+
+        echo "Checking for Docker configuration:"
+        if [ -f "app/fresh-oneiric/docker/Dockerfile" ] && [ -f "app/fresh-oneiric/docker/docker-compose.yml" ]; then
+          echo "✓ Docker configuration files found"
+        else
+          echo "ERROR: Docker configuration files missing"
+          echo "Contents of app/fresh-oneiric/docker/:"
+          ls -la app/fresh-oneiric/docker/ || echo "Docker directory not found"
+          exit 1
+        fi
+
+    - name: Show Host info (debug)
+      run: |
+        echo "Runner: $RUNNER_NAME"
+        echo "Branch: $GITHUB_REF_NAME  SHA: $GITHUB_SHA"
+        uname -a
+        docker --version || true
+        docker compose version || true
+
+    - name: Build docker image (local)
+      if: ${{ !(inputs.no_build || false) }}
+      env:
+        IMAGE_NAME: oneiric:${{ env.IMAGE_TAG }}
+      run: |
+        docker build --progress=plain \
+          -t "${IMAGE_NAME}" \
+          -f app/fresh-oneiric/docker/Dockerfile \
+          app/fresh-oneiric
+        docker image ls "${IMAGE_NAME}" || true
+
+    - name: Prepare Docker environment
+      env:
+        DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      run: |
+        echo "=== Preparing Docker Environment ==="
+        echo "Creating required directories for bind mounts..."
+
+        # Debug path information
+        echo "=== Path Information ==="
+        echo "Current working directory: $(pwd)"
+        echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+        echo "Runner name: $RUNNER_NAME"
+        echo "GITHUB_REPOSITORY: $GITHUB_REPOSITORY"
+        echo "GITHUB_REPOSITORY_NAME: ${GITHUB_REPOSITORY##*/}"
+
+        # Calculate the host filesystem path for bind mounts
+        # Runner's /_work maps to /volume1/docker/github-runner/_work on NAS host
+        RUNNER_WORK_DIR="/_work"
+        HOST_WORK_DIR="/volume1/docker/github-runner/_work"
+
+        # Get the relative path from runner's work directory to current directory
+        CURRENT_DIR="$(pwd)"
+        RELATIVE_PATH="${CURRENT_DIR#$RUNNER_WORK_DIR/}"
+
+        echo "=== Path Calculation ==="
+        echo "Runner work directory: $RUNNER_WORK_DIR"
+        echo "Host work directory: $HOST_WORK_DIR"
+        echo "Current directory: $CURRENT_DIR"
+        echo "Relative path: $RELATIVE_PATH"
+
+        # Construct the host filesystem path
+        HOST_PROJECT_PATH="$HOST_WORK_DIR/$RELATIVE_PATH"
+        HOST_SURREALDB_DATA_PATH="$HOST_PROJECT_PATH/app/fresh-oneiric/docker/surrealdb-data"
+
+        echo "Host project path: $HOST_PROJECT_PATH"
+        echo "Host SurrealDB data path: $HOST_SURREALDB_DATA_PATH"
+
+        # Create the surrealdb-data directory at the host filesystem path
+        echo "Creating SurrealDB data directory..."
+        mkdir -p "$HOST_SURREALDB_DATA_PATH"
+        echo "✓ Created directory: $HOST_SURREALDB_DATA_PATH"
+
+        # Also create the directory in the runner's filesystem for consistency
+        mkdir -p app/fresh-oneiric/docker/surrealdb-data
+        echo "✓ Created runner directory: app/fresh-oneiric/docker/surrealdb-data"
+
+        # Set proper permissions for both directories
+        chmod 755 "$HOST_SURREALDB_DATA_PATH"
+        chmod 755 app/fresh-oneiric/docker/surrealdb-data
+        echo "✓ Set proper permissions for SurrealDB data directories"
+
+        # Validate Doppler configuration
+        echo "=== Validating Doppler Configuration ==="
+        if [ -z "$DOPPLER_TOKEN" ]; then
+          echo "WARNING: DOPPLER_TOKEN is not set. Application may fail to start if Doppler secrets are required."
+          echo "Please ensure DOPPLER_TOKEN is configured in GitHub repository secrets."
+          echo "The application will attempt to start but may encounter configuration issues."
+        else
+          echo "✓ DOPPLER_TOKEN is configured"
+        fi
+
+    - name: Deploy with docker compose
+      env:
+        IMAGE_TAG: ${{ env.IMAGE_TAG }}
+        WORKSPACE_PATH: ${{ github.workspace }}/app/fresh-oneiric
+        DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      run: |
+        # Pre-deployment validation
+        echo "=== Pre-Deployment Validation ==="
+        echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+        echo "WORKSPACE_PATH: $WORKSPACE_PATH"
+        echo "IMAGE_TAG: $IMAGE_TAG"
+        echo "Current working directory: $(pwd)"
+
+        # Final verification that all required paths exist
+        echo "=== Final Path Verification ==="
+        REQUIRED_PATHS=(
+          "app/fresh-oneiric"
+          "app/fresh-oneiric/main.ts"
+          "app/fresh-oneiric/deno.json"
+          "app/fresh-oneiric/docker"
+          "app/fresh-oneiric/docker/Dockerfile"
+          "app/fresh-oneiric/docker/docker-compose.yml"
+        )
+
+        for path in "${REQUIRED_PATHS[@]}"; do
+          if [ -e "$path" ]; then
+            echo "✓ $path exists"
+          else
+            echo "ERROR: Required path missing: $path"
+            echo "Current directory contents:"
+            ls -la
+            echo "App directory contents:"
+            ls -la app/ 2>/dev/null || echo "App directory not accessible"
+            exit 1
+          fi
+        done
+
+        # Navigate to the docker directory with error handling
+        echo "=== Navigating to Docker Directory ==="
+        if ! cd app/fresh-oneiric/docker; then
+          echo "ERROR: Failed to navigate to app/fresh-oneiric/docker"
+          echo "Current directory: $(pwd)"
+          echo "Available directories:"
+          find . -type d -name "*docker*" -o -name "*fresh*" | head -10
+          exit 1
+        fi
+
+        echo "Successfully navigated to: $(pwd)"
+        echo "Docker directory contents:"
+        ls -la
+
+        # Verify docker-compose.yml is valid
+        echo "=== Docker Compose Configuration Validation ==="
+        if ! docker compose -f docker-compose.yml config >/dev/null 2>&1; then
+          echo "ERROR: Invalid docker-compose.yml configuration"
+          docker compose -f docker-compose.yml config || true
+          exit 1
+        fi
+        echo "✓ Docker Compose configuration is valid"
+
+        # Set deployment environment variables
+        echo "=== Setting Deployment Environment ==="
+        export IMAGE_TAG
+        export WORKSPACE_PATH
+        export DEPLOYMENT_MODE=production
+
+        echo "Deployment environment:"
+        echo "  IMAGE_TAG: $IMAGE_TAG"
+        echo "  WORKSPACE_PATH: $WORKSPACE_PATH"
+        echo "  DEPLOYMENT_MODE: $DEPLOYMENT_MODE"
+
+        # Clean up any existing containers to prevent conflicts
+        echo "=== Cleaning Up Existing Deployment ==="
+        docker compose -f docker-compose.yml down --remove-orphans || true
+
+        # Pull latest images (ignore failures for local builds)
+        echo "=== Pulling Docker Images ==="
+        docker compose -f docker-compose.yml pull --ignore-pull-failures || true
+
+        # Deploy with comprehensive error handling
+        echo "=== Starting Docker Compose Deployment ==="
+        if ! docker compose -f docker-compose.yml up -d --remove-orphans --build; then
+          echo "ERROR: Docker Compose deployment failed"
+          echo "Container logs:"
+          docker compose -f docker-compose.yml logs || true
+          echo "Container status:"
+          docker ps -a --filter "name=oneiric" || true
+          exit 1
+        fi
+
+        # Verify deployment success
+        echo "=== Post-Deployment Verification ==="
+        echo "Container status:"
+        docker ps --filter "name=oneiric" --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
+
+        # Wait for services to initialize
+        echo "Waiting for services to initialize..."
+        sleep 15
+
+        # Check application container health
+        echo "=== Application Health Check ==="
+        if docker ps --filter "name=oneiric-app" --filter "status=running" | grep -q oneiric-app; then
+          echo "✓ Application container is running successfully"
+          
+          # Show recent logs for verification
+          echo "Recent application logs:"
+          docker logs oneiric-app --tail 20 || true
+        else
+          echo "ERROR: Application container failed to start or is not running"
+          echo "All containers status:"
+          docker ps -a --filter "name=oneiric"
+          echo "Application container logs:"
+          docker logs oneiric-app --tail 50 || true
+          echo "Docker Compose logs:"
+          docker compose -f docker-compose.yml logs --tail 50 || true
+          exit 1
+        fi
+
+        # Verify SurrealDB container if it should be running
+        echo "=== Database Health Check ==="
+        if docker ps --filter "name=oneiric-surrealdb" --filter "status=running" | grep -q oneiric-surrealdb; then
+          echo "✓ SurrealDB container is running successfully"
+        else
+          echo "WARNING: SurrealDB container may not be running"
+          docker logs oneiric-surrealdb --tail 20 || true
+        fi
+
+    - name: Application health check and verification
+      env:
+        HOSTNAME: ${{ secrets.HOSTNAME }}
+      run: |
+        echo "=== Final Application Health Check ==="
+
+        # Wait for application to fully initialize
+        echo "Waiting for application to fully initialize..."
+        sleep 5
+
+        # Check if application is responding on the expected port
+        echo "Checking application connectivity..."
+        MAX_RETRIES=6
+        RETRY_COUNT=0
+
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+          if curl -fsS --connect-timeout 5 --max-time 10 http://${HOSTNAME}:8000/api/health >/dev/null 2>&1; then
+            echo "✓ Application health check passed"
+            break
+          else
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            echo "Health check attempt $RETRY_COUNT/$MAX_RETRIES failed, retrying in 10 seconds..."
+            
+            if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+              echo "ERROR: Application health check failed after $MAX_RETRIES attempts"
+              echo "Application container status:"
+              docker ps --filter "name=oneiric-app"
+              echo "Application logs:"
+              docker logs oneiric-app --tail 50 || true
+              echo "Network connectivity test:"
+              curl -v http://${HOSTNAME}:8000/api/health || true
+              exit 1
+            fi
+            
+            sleep 10
+          fi
+        done
+
+        # Additional verification checks
+        echo "=== Additional Verification ==="
+
+        # Check if main application endpoint is accessible
+        echo "Testing main application endpoint..."
+        if curl -fsS --connect-timeout 5 --max-time 10 http://localhost:8000/ >/dev/null 2>&1; then
+          echo "✓ Main application endpoint is accessible"
+        else
+          echo "WARNING: Main application endpoint may not be fully ready"
+        fi
+
+        # Final deployment summary
+        echo "=== Deployment Summary ==="
+        echo "Deployment completed successfully at $(date)"
+        echo "Application URL: http://localhost:8000"
+        echo "Health check endpoint: http://localhost:8000/api/health"
+
+        echo "Active containers:"
+        docker ps --filter "name=oneiric" --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
+
+        echo "=== Deployment Verification Complete ==="

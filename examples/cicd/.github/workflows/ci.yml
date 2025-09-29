@@ -1,0 +1,184 @@
+name: CI Pipeline
+
+# Triggers for the CI pipeline
+on:
+  push:
+    branches: [ main, develop ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'examples/**'
+      - '.gitignore'
+  pull_request:
+    branches: [ main, develop ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'examples/**'
+      - '.gitignore'
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force build even if no code changes'
+        required: false
+        default: false
+        type: boolean
+      skip_tests:
+        description: 'Skip test execution (emergency builds only)'
+        required: false
+        default: false
+        type: boolean
+
+# Global environment variables
+env:
+  GO_VERSION: '1.21'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+# Concurrency control to prevent multiple CI runs
+concurrency:
+  group: ci-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+  actions: read
+
+jobs:
+  # Test job - runs code quality checks and tests
+  test:
+    name: Test and Quality
+    uses: ./.github/workflows/_reusable/test.yml
+    with:
+      go-version: ${{ env.GO_VERSION }}
+      upload-coverage: true
+    secrets: inherit
+
+  # Build job - builds binaries and container images
+  build:
+    name: Build Artifacts
+    needs: test
+    uses: ./.github/workflows/_reusable/build.yml
+    with:
+      go-version: ${{ env.GO_VERSION }}
+      registry: ${{ env.REGISTRY }}
+      image-name: ${{ env.IMAGE_NAME }}
+      build-binaries: true
+      build-container: true
+    secrets: inherit
+
+  # Security job - runs security scans
+  security:
+    name: Security Scan
+    needs: test
+    uses: ./.github/workflows/_reusable/security.yml
+    with:
+      go-version: ${{ env.GO_VERSION }}
+      registry: ${{ env.REGISTRY }}
+      image-name: ${{ env.IMAGE_NAME }}
+      run-codeql: ${{ github.event_name == 'push' }}
+      run-dependency-review: ${{ github.event_name == 'pull_request' }}
+    secrets: inherit
+
+  # Summary job - provides overall CI status and outputs for CD pipeline
+  ci-summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    needs: [test, build, security]
+    if: always()
+    outputs:
+      ci-status: ${{ steps.status.outputs.ci-status }}
+      image-tag: ${{ steps.outputs.outputs.image-tag }}
+      image-digest: ${{ steps.outputs.outputs.image-digest }}
+      coverage: ${{ steps.outputs.outputs.coverage }}
+      security-passed: ${{ steps.outputs.outputs.security-passed }}
+      build-artifacts: ${{ steps.outputs.outputs.build-artifacts }}
+    
+    steps:
+    - name: Determine CI Status
+      id: status
+      run: |
+        # Check if any critical job failed
+        if [[ "${{ needs.test.result }}" == "failure" || "${{ needs.build.result }}" == "failure" || "${{ needs.security.result }}" == "failure" ]]; then
+          echo "ci-status=failure" >> $GITHUB_OUTPUT
+          CI_STATUS="failure"
+        else
+          echo "ci-status=success" >> $GITHUB_OUTPUT
+          CI_STATUS="success"
+        fi
+        
+        echo "CI_STATUS=$CI_STATUS" >> $GITHUB_ENV
+
+    - name: Extract CI Outputs
+      id: outputs
+      run: |
+        # Extract outputs from successful jobs
+        if [[ "${{ needs.build.result }}" == "success" ]]; then
+          # Generate image tag based on branch and commit
+          if [[ "${{ github.ref_name }}" == "main" ]]; then
+            IMAGE_TAG="latest"
+          elif [[ "${{ github.ref_name }}" == "develop" ]]; then
+            IMAGE_TAG="develop"
+          else
+            IMAGE_TAG="${{ github.ref_name }}"
+          fi
+          
+          echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "image-digest=${{ needs.build.outputs.digest }}" >> $GITHUB_OUTPUT
+          echo "build-artifacts=true" >> $GITHUB_OUTPUT
+        else
+          echo "image-tag=" >> $GITHUB_OUTPUT
+          echo "image-digest=" >> $GITHUB_OUTPUT
+          echo "build-artifacts=false" >> $GITHUB_OUTPUT
+        fi
+        
+        # Extract test coverage
+        if [[ "${{ needs.test.result }}" == "success" ]]; then
+          echo "coverage=${{ needs.test.outputs.coverage }}" >> $GITHUB_OUTPUT
+        else
+          echo "coverage=0" >> $GITHUB_OUTPUT
+        fi
+        
+        # Extract security status
+        if [[ "${{ needs.security.result }}" == "success" ]]; then
+          echo "security-passed=true" >> $GITHUB_OUTPUT
+        else
+          echo "security-passed=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create CI Summary
+      run: |
+        echo "## CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Job | Status | Result |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----|--------|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Test | ${{ needs.test.result }} | ${{ needs.test.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Build | ${{ needs.build.result }} | ${{ needs.build.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Security | ${{ needs.security.result }} | ${{ needs.security.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [[ "$CI_STATUS" == "success" ]]; then
+          echo "### ✅ CI Pipeline Completed Successfully" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Build Outputs:**" >> $GITHUB_STEP_SUMMARY
+          echo "- **Coverage**: ${{ steps.outputs.outputs.coverage }}%" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image Tag**: ${{ steps.outputs.outputs.image-tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image Digest**: ${{ steps.outputs.outputs.image-digest }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Security Scan**: ${{ steps.outputs.outputs.security-passed == 'true' && 'Passed' || 'Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Artifacts**: ${{ steps.outputs.outputs.build-artifacts == 'true' && 'Available' || 'Not Available' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🚀 **Ready for CD Pipeline**" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "### ❌ CI Pipeline Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Please check individual job logs for details." >> $GITHUB_STEP_SUMMARY
+          echo "CD Pipeline will not be triggered." >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: Fail workflow if CI failed
+      if: env.CI_STATUS == 'failure'
+      run: |
+        echo "❌ CI Pipeline failed - check individual job logs for details"
+        exit 1

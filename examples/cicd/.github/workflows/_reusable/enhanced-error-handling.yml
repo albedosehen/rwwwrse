@@ -1,0 +1,299 @@
+name: Enhanced Error Handling Workflow
+
+on:
+  workflow_call:
+    inputs:
+      operation:
+        description: 'Operation being performed (deployment, build, test, security)'
+        required: true
+        type: string
+      environment:
+        description: 'Target environment'
+        required: true
+        type: string
+      enable-circuit-breaker:
+        description: 'Enable circuit breaker pattern'
+        required: false
+        type: boolean
+        default: true
+      enable-auto-recovery:
+        description: 'Enable automatic error recovery'
+        required: false
+        type: boolean
+        default: true
+      enable-monitoring:
+        description: 'Enable monitoring and health checks'
+        required: false
+        type: boolean
+        default: true
+      enable-notifications:
+        description: 'Enable advanced notifications'
+        required: false
+        type: boolean
+        default: true
+      enable-audit-logging:
+        description: 'Enable comprehensive audit logging'
+        required: false
+        type: boolean
+        default: true
+      rollback-version:
+        description: 'Version to rollback to if recovery fails'
+        required: false
+        type: string
+      correlation-id:
+        description: 'Correlation ID for tracking across operations'
+        required: false
+        type: string
+    outputs:
+      error-handled:
+        description: 'Whether error handling was successful'
+        value: ${{ jobs.error-coordination.outputs.error-handled }}
+      recovery-status:
+        description: 'Status of recovery attempts'
+        value: ${{ jobs.error-coordination.outputs.recovery-status }}
+      monitoring-status:
+        description: 'Status of monitoring checks'
+        value: ${{ jobs.error-coordination.outputs.monitoring-status }}
+
+jobs:
+  error-coordination:
+    name: Error Handling Coordination
+    runs-on: ubuntu-latest
+    outputs:
+      error-handled: ${{ steps.coordination.outputs.error-handled }}
+      recovery-status: ${{ steps.coordination.outputs.recovery-status }}
+      monitoring-status: ${{ steps.coordination.outputs.monitoring-status }}
+      correlation-id: ${{ steps.setup.outputs.correlation-id }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup error handling coordination
+      id: setup
+      run: |
+        echo "Setting up comprehensive error handling coordination..."
+        
+        # Generate correlation ID if not provided
+        if [ -z "${{ inputs.correlation-id }}" ]; then
+          CORRELATION_ID="eh-coord-$(date +%s)-$(uuidgen | cut -d'-' -f1)"
+        else
+          CORRELATION_ID="${{ inputs.correlation-id }}"
+        fi
+        
+        echo "correlation-id=$CORRELATION_ID" >> $GITHUB_OUTPUT
+        echo "CORRELATION_ID=$CORRELATION_ID" >> $GITHUB_ENV
+        
+        mkdir -p .error-handling/{logs,state,recovery}
+        echo "$(date +%s)" > .error-handling/start-time
+        
+        echo "✅ Error handling coordination initialized"
+        echo "Operation: ${{ inputs.operation }}"
+        echo "Environment: ${{ inputs.environment }}"
+        echo "Correlation ID: $CORRELATION_ID"
+
+    - name: Initialize audit logging
+      if: inputs.enable-audit-logging == true
+      uses: ./.github/actions/audit-logger
+      with:
+        operation: ${{ inputs.operation }}
+        event-type: 'start'
+        environment: ${{ inputs.environment }}
+        correlation-id: ${{ env.CORRELATION_ID }}
+        log-level: 'info'
+        audit-data: |
+          {
+            "error_handling_enabled": true,
+            "circuit_breaker": ${{ inputs.enable-circuit-breaker }},
+            "auto_recovery": ${{ inputs.enable-auto-recovery }},
+            "monitoring": ${{ inputs.enable-monitoring }},
+            "notifications": ${{ inputs.enable-notifications }}
+          }
+
+    - name: Execute operation with error handling
+      id: operation
+      uses: ./.github/actions/error-handler
+      with:
+        operation: ${{ inputs.operation }}
+        max-retries: 3
+        initial-delay: 5
+        backoff-factor: 2
+        circuit-breaker-threshold: 5
+        circuit-breaker-timeout: 60
+        correlation-id: ${{ env.CORRELATION_ID }}
+        environment: ${{ inputs.environment }}
+      continue-on-error: true
+
+    - name: Monitor application health
+      id: monitoring
+      if: inputs.enable-monitoring == true
+      uses: ./.github/actions/monitoring-integration
+      with:
+        operation: ${{ inputs.operation }}
+        environment: ${{ inputs.environment }}
+        correlation-id: ${{ env.CORRELATION_ID }}
+        timeout: 30
+        retry-count: 3
+      continue-on-error: true
+
+    - name: Attempt error recovery
+      id: recovery
+      if: steps.operation.outputs.success != 'true' && inputs.enable-auto-recovery == true
+      uses: ./.github/actions/error-recovery
+      with:
+        error-type: ${{ inputs.operation }}
+        environment: ${{ inputs.environment }}
+        recovery-strategy: 'auto'
+        max-recovery-attempts: 3
+        rollback-version: ${{ inputs.rollback-version }}
+        correlation-id: ${{ env.CORRELATION_ID }}
+        enable-self-healing: true
+      continue-on-error: true
+
+    - name: Send comprehensive notifications
+      id: notifications
+      if: inputs.enable-notifications == true
+      uses: ./.github/actions/advanced-notify
+      with:
+        event-type: ${{ inputs.operation }}
+        severity: ${{ steps.operation.outputs.success == 'true' && 'low' || 'high' }}
+        environment: ${{ inputs.environment }}
+        correlation-id: ${{ env.CORRELATION_ID }}
+        template-name: ${{ inputs.operation }}-${{ steps.operation.outputs.success == 'true' && 'success' || 'failure' }}
+        custom-data: |
+          {
+            "operation_success": "${{ steps.operation.outputs.success }}",
+            "circuit_breaker_state": "${{ steps.operation.outputs.circuit-breaker-state }}",
+            "retry_count": "${{ steps.operation.outputs.retry-count }}",
+            "monitoring_status": "${{ steps.monitoring.outputs.health-status }}",
+            "recovery_status": "${{ steps.recovery.outputs.recovery-status }}",
+            "recovery_actions": "${{ steps.recovery.outputs.recovery-actions }}"
+          }
+        channels: 'slack,email'
+        escalation-enabled: true
+      continue-on-error: true
+
+    - name: Log final audit entry
+      if: inputs.enable-audit-logging == true
+      uses: ./.github/actions/audit-logger
+      with:
+        operation: ${{ inputs.operation }}
+        event-type: ${{ steps.operation.outputs.success == 'true' && 'success' || 'failure' }}
+        environment: ${{ inputs.environment }}
+        correlation-id: ${{ env.CORRELATION_ID }}
+        log-level: ${{ steps.operation.outputs.success == 'true' && 'info' || 'error' }}
+        audit-data: |
+          {
+            "final_status": "${{ steps.operation.outputs.success == 'true' && 'success' || 'failure' }}",
+            "error_handling_summary": {
+              "operation_success": "${{ steps.operation.outputs.success }}",
+              "circuit_breaker_state": "${{ steps.operation.outputs.circuit-breaker-state }}",
+              "retry_count": "${{ steps.operation.outputs.retry-count }}",
+              "monitoring_health": "${{ steps.monitoring.outputs.health-status }}",
+              "recovery_attempted": "${{ steps.recovery.conclusion != 'skipped' }}",
+              "recovery_status": "${{ steps.recovery.outputs.recovery-status }}",
+              "notifications_sent": "${{ steps.notifications.outputs.notifications-sent }}"
+            }
+          }
+
+    - name: Determine final coordination status
+      id: coordination
+      run: |
+        echo "Determining final error handling coordination status..."
+        
+        OPERATION_SUCCESS="${{ steps.operation.outputs.success }}"
+        MONITORING_STATUS="${{ steps.monitoring.outputs.health-status }}"
+        RECOVERY_STATUS="${{ steps.recovery.outputs.recovery-status }}"
+        
+        ERROR_HANDLED=false
+        FINAL_RECOVERY_STATUS="not-attempted"
+        FINAL_MONITORING_STATUS="not-attempted"
+        
+        # Determine if error was successfully handled
+        if [ "$OPERATION_SUCCESS" = "true" ]; then
+          ERROR_HANDLED=true
+          echo "✅ Operation completed successfully"
+        elif [ "$RECOVERY_STATUS" = "success" ] || [ "$RECOVERY_STATUS" = "rollback-completed" ]; then
+          ERROR_HANDLED=true
+          echo "✅ Error successfully handled through recovery"
+        else
+          ERROR_HANDLED=false
+          echo "❌ Error handling was not successful"
+        fi
+        
+        # Set monitoring status
+        if [ "${{ inputs.enable-monitoring }}" = "true" ]; then
+          FINAL_MONITORING_STATUS="$MONITORING_STATUS"
+        fi
+        
+        # Set recovery status
+        if [ "${{ inputs.enable-auto-recovery }}" = "true" ] && [ "$OPERATION_SUCCESS" != "true" ]; then
+          FINAL_RECOVERY_STATUS="$RECOVERY_STATUS"
+        fi
+        
+        echo "error-handled=$ERROR_HANDLED" >> $GITHUB_OUTPUT
+        echo "recovery-status=$FINAL_RECOVERY_STATUS" >> $GITHUB_OUTPUT
+        echo "monitoring-status=$FINAL_MONITORING_STATUS" >> $GITHUB_OUTPUT
+        
+        echo "📊 Error Handling Summary:"
+        echo "- Error Handled: $ERROR_HANDLED"
+        echo "- Recovery Status: $FINAL_RECOVERY_STATUS"
+        echo "- Monitoring Status: $FINAL_MONITORING_STATUS"
+
+    - name: Create comprehensive error handling summary
+      if: always()
+      run: |
+        echo "## 🛡️ Enhanced Error Handling Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Component | Status | Details |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----------|--------|---------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Operation | ${{ steps.operation.outputs.success == 'true' && '✅ Success' || '❌ Failed' }} | ${{ inputs.operation }} in ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Circuit Breaker | ${{ steps.operation.outputs.circuit-breaker-state || 'N/A' }} | State: ${{ steps.operation.outputs.circuit-breaker-state || 'Not Used' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Retry Logic | ${{ steps.operation.outputs.retry-count || '0' }} attempts | Max retries with exponential backoff |" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ inputs.enable-monitoring }}" = "true" ]; then
+          echo "| Health Monitoring | ${{ steps.monitoring.outputs.health-status == 'healthy' && '✅ Healthy' || '❌ Unhealthy' }} | Status: ${{ steps.monitoring.outputs.health-status || 'Unknown' }} |" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "| Health Monitoring | ⏭️ Disabled | Not enabled for this run |" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ "${{ inputs.enable-auto-recovery }}" = "true" ] && [ "${{ steps.operation.outputs.success }}" != "true" ]; then
+          echo "| Auto Recovery | ${{ steps.recovery.outputs.recovery-status == 'success' && '✅ Success' || steps.recovery.outputs.recovery-status == 'rollback-completed' && '🔄 Rollback' || '❌ Failed' }} | Status: ${{ steps.recovery.outputs.recovery-status || 'Not Attempted' }} |" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "| Auto Recovery | ⏭️ Not Needed | Operation successful or disabled |" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ "${{ inputs.enable-notifications }}" = "true" ]; then
+          echo "| Notifications | ${{ steps.notifications.outputs.notifications-sent || '0' }} sent | Multi-channel notification system |" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "| Notifications | ⏭️ Disabled | Not enabled for this run |" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ "${{ inputs.enable-audit-logging }}" = "true" ]; then
+          echo "| Audit Logging | ✅ Active | Comprehensive audit trail created |" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "| Audit Logging | ⏭️ Disabled | Not enabled for this run |" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🎯 Overall Result" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ steps.coordination.outputs.error-handled }}" = "true" ]; then
+          echo "✅ **Error handling was successful.** The operation completed successfully or errors were properly handled through recovery mechanisms." >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Error handling was not successful.** Manual intervention may be required." >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Correlation ID:** \`${{ env.CORRELATION_ID }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "All error handling components worked together to provide comprehensive coverage for the ${{ inputs.operation }} operation in the ${{ inputs.environment }} environment." >> $GITHUB_STEP_SUMMARY
+
+    - name: Fail workflow if error not handled
+      if: steps.coordination.outputs.error-handled != 'true'
+      run: |
+        echo "❌ Error handling was not successful - failing workflow"
+        echo "Operation: ${{ inputs.operation }}"
+        echo "Environment: ${{ inputs.environment }}"
+        echo "Correlation ID: ${{ env.CORRELATION_ID }}"
+        exit 1

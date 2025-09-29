@@ -1,0 +1,369 @@
+name: Reusable Deploy Workflow
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Target environment (development, staging, production)'
+        required: true
+        type: string
+      image-tag:
+        description: 'Container image tag to deploy'
+        required: true
+        type: string
+      image-digest:
+        description: 'Container image digest for verification'
+        required: false
+        type: string
+      deployment-strategy:
+        description: 'Deployment strategy (rolling, blue-green, canary)'
+        required: false
+        type: string
+        default: 'rolling'
+      skip-tests:
+        description: 'Skip deployment tests'
+        required: false
+        type: boolean
+        default: false
+      require-approval:
+        description: 'Require manual approval before deployment'
+        required: false
+        type: boolean
+        default: false
+      enable-monitoring:
+        description: 'Enable enhanced monitoring during deployment'
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      deployment-url:
+        description: 'URL of the deployed application'
+        value: ${{ jobs.deploy.outputs.deployment-url }}
+      deployment-status:
+        description: 'Status of the deployment'
+        value: ${{ jobs.deploy.outputs.deployment-status }}
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Load environment configuration
+  load-config:
+    name: Load Environment Configuration
+    runs-on: ubuntu-latest
+    outputs:
+      config: ${{ steps.load.outputs.config }}
+      kubeconfig-secret: ${{ steps.load.outputs.kubeconfig-secret }}
+      namespace: ${{ steps.load.outputs.namespace }}
+      ingress-host: ${{ steps.load.outputs.ingress-host }}
+      replicas: ${{ steps.load.outputs.replicas }}
+      resources: ${{ steps.load.outputs.resources }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Load environment configuration
+      id: load
+      run: |
+        ENV="${{ inputs.environment }}"
+        
+        # Load configuration based on environment
+        case "$ENV" in
+          "development")
+            echo "kubeconfig-secret=KUBECONFIG_DEV" >> $GITHUB_OUTPUT
+            echo "namespace=rwwwrse-dev" >> $GITHUB_OUTPUT
+            echo "ingress-host=dev.rwwwrse.example.com" >> $GITHUB_OUTPUT
+            echo "replicas=1" >> $GITHUB_OUTPUT
+            echo "resources={\"requests\":{\"cpu\":\"100m\",\"memory\":\"128Mi\"},\"limits\":{\"cpu\":\"500m\",\"memory\":\"512Mi\"}}" >> $GITHUB_OUTPUT
+            ;;
+          "staging")
+            echo "kubeconfig-secret=KUBECONFIG_STAGING" >> $GITHUB_OUTPUT
+            echo "namespace=rwwwrse-staging" >> $GITHUB_OUTPUT
+            echo "ingress-host=staging.rwwwrse.example.com" >> $GITHUB_OUTPUT
+            echo "replicas=2" >> $GITHUB_OUTPUT
+            echo "resources={\"requests\":{\"cpu\":\"200m\",\"memory\":\"256Mi\"},\"limits\":{\"cpu\":\"1000m\",\"memory\":\"1Gi\"}}" >> $GITHUB_OUTPUT
+            ;;
+          "production")
+            echo "kubeconfig-secret=KUBECONFIG_PROD" >> $GITHUB_OUTPUT
+            echo "namespace=rwwwrse-prod" >> $GITHUB_OUTPUT
+            echo "ingress-host=rwwwrse.example.com" >> $GITHUB_OUTPUT
+            echo "replicas=3" >> $GITHUB_OUTPUT
+            echo "resources={\"requests\":{\"cpu\":\"500m\",\"memory\":\"512Mi\"},\"limits\":{\"cpu\":\"2000m\",\"memory\":\"2Gi\"}}" >> $GITHUB_OUTPUT
+            ;;
+          *)
+            echo "ERROR: Unknown environment: $ENV"
+            exit 1
+            ;;
+        esac
+        
+        echo "config=loaded" >> $GITHUB_OUTPUT
+
+  # Pre-deployment validation
+  pre-deployment:
+    name: Pre-deployment Validation
+    runs-on: ubuntu-latest
+    needs: load-config
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Validate image exists
+      run: |
+        IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.image-tag }}"
+        echo "Validating image: $IMAGE"
+        
+        # Check if image exists in registry
+        if docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
+          echo "✅ Image exists and is accessible"
+        else
+          echo "❌ Image not found or not accessible: $IMAGE"
+          exit 1
+        fi
+
+    - name: Validate deployment manifests
+      run: |
+        # Check if Kubernetes manifests exist
+        MANIFEST_DIR="examples/kubernetes/minikube"
+        
+        if [ ! -d "$MANIFEST_DIR" ]; then
+          echo "❌ Kubernetes manifests directory not found: $MANIFEST_DIR"
+          exit 1
+        fi
+        
+        REQUIRED_FILES=(
+          "$MANIFEST_DIR/namespace.yaml"
+          "$MANIFEST_DIR/deployment.yaml"
+          "$MANIFEST_DIR/configmap.yaml"
+        )
+        
+        for file in "${REQUIRED_FILES[@]}"; do
+          if [ ! -f "$file" ]; then
+            echo "❌ Required manifest file not found: $file"
+            exit 1
+          fi
+          echo "✅ Found manifest: $file"
+        done
+
+    - name: Security scan
+      if: inputs.environment == 'production'
+      run: |
+        IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.image-tag }}"
+        echo "Running security scan on production image: $IMAGE"
+        
+        # Run Trivy security scan
+        docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+          aquasec/trivy:latest image --exit-code 1 --severity HIGH,CRITICAL "$IMAGE"
+
+  # Manual approval for sensitive environments
+  approval:
+    name: Manual Approval
+    runs-on: ubuntu-latest
+    needs: [load-config, pre-deployment]
+    if: inputs.require-approval == true
+    environment:
+      name: ${{ inputs.environment }}-approval
+
+    steps:
+    - name: Request approval
+      run: |
+        echo "Manual approval required for ${{ inputs.environment }} deployment"
+        echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.image-tag }}"
+        echo "Strategy: ${{ inputs.deployment-strategy }}"
+
+  # Main deployment job
+  deploy:
+    name: Deploy to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    needs: [load-config, pre-deployment, approval]
+    if: always() && (needs.approval.result == 'success' || needs.approval.result == 'skipped') && needs.pre-deployment.result == 'success'
+    environment:
+      name: ${{ inputs.environment }}
+      url: https://${{ needs.load-config.outputs.ingress-host }}
+    outputs:
+      deployment-url: https://${{ needs.load-config.outputs.ingress-host }}
+      deployment-status: ${{ steps.deploy-status.outputs.status }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure kubectl
+      run: |
+        echo "${{ secrets[needs.load-config.outputs.kubeconfig-secret] }}" | base64 -d > kubeconfig
+        export KUBECONFIG=kubeconfig
+        kubectl version --client
+
+    - name: Deploy using Kubernetes
+      uses: ./.github/actions/deploy-k8s
+      with:
+        namespace: ${{ needs.load-config.outputs.namespace }}
+        image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.image-tag }}
+        replicas: ${{ needs.load-config.outputs.replicas }}
+        resources: ${{ needs.load-config.outputs.resources }}
+        strategy: ${{ inputs.deployment-strategy }}
+        kubeconfig-path: kubeconfig
+
+    - name: Wait for deployment rollout
+      run: |
+        export KUBECONFIG=kubeconfig
+        
+        echo "Waiting for deployment to complete..."
+        kubectl rollout status deployment/rwwwrse -n ${{ needs.load-config.outputs.namespace }} --timeout=600s
+        
+        echo "Deployment completed successfully"
+
+    - name: Health check
+      uses: ./.github/actions/health-check
+      with:
+        url: https://${{ needs.load-config.outputs.ingress-host }}
+        timeout: 300
+        retry-interval: 10
+
+    - name: Set deployment status
+      id: deploy-status
+      run: echo "status=success" >> $GITHUB_OUTPUT
+
+  # Post-deployment tests
+  post-deployment-tests:
+    name: Post-deployment Tests
+    runs-on: ubuntu-latest
+    needs: [load-config, deploy]
+    if: inputs.skip-tests == false && needs.deploy.result == 'success'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Smoke tests
+      run: |
+        BASE_URL="https://${{ needs.load-config.outputs.ingress-host }}"
+        
+        echo "Running smoke tests against: $BASE_URL"
+        
+        # Test health endpoint
+        if curl -f --retry 3 --retry-delay 10 "$BASE_URL/health"; then
+          echo "✅ Health check passed"
+        else
+          echo "❌ Health check failed"
+          exit 1
+        fi
+        
+        # Test metrics endpoint
+        if curl -f --retry 3 --retry-delay 10 "$BASE_URL/metrics"; then
+          echo "✅ Metrics endpoint accessible"
+        else
+          echo "❌ Metrics endpoint failed"
+          exit 1
+        fi
+
+    - name: Integration tests
+      if: inputs.environment != 'development'
+      run: |
+        BASE_URL="https://${{ needs.load-config.outputs.ingress-host }}"
+        
+        echo "Running integration tests..."
+        
+        # Test main application functionality
+        if curl -f --retry 3 --retry-delay 10 "$BASE_URL/"; then
+          echo "✅ Main application endpoint accessible"
+        else
+          echo "❌ Main application endpoint failed"
+          exit 1
+        fi
+
+    - name: Performance tests
+      if: inputs.environment == 'staging'
+      run: |
+        BASE_URL="https://${{ needs.load-config.outputs.ingress-host }}"
+        
+        echo "Running performance tests..."
+        
+        # Basic load test using curl
+        echo "Testing response time..."
+        RESPONSE_TIME=$(curl -o /dev/null -s -w '%{time_total}' "$BASE_URL/health")
+        
+        if (( $(echo "$RESPONSE_TIME < 2.0" | bc -l) )); then
+          echo "✅ Response time acceptable: ${RESPONSE_TIME}s"
+        else
+          echo "⚠️ Response time high: ${RESPONSE_TIME}s"
+        fi
+
+  # Rollback capability
+  rollback:
+    name: Rollback Deployment
+    runs-on: ubuntu-latest
+    needs: [load-config, deploy, post-deployment-tests]
+    if: failure() && needs.deploy.result == 'success'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure kubectl
+      run: |
+        echo "${{ secrets[needs.load-config.outputs.kubeconfig-secret] }}" | base64 -d > kubeconfig
+        export KUBECONFIG=kubeconfig
+
+    - name: Rollback deployment
+      run: |
+        export KUBECONFIG=kubeconfig
+        
+        echo "Rolling back deployment due to test failures..."
+        kubectl rollout undo deployment/rwwwrse -n ${{ needs.load-config.outputs.namespace }}
+        
+        echo "Waiting for rollback to complete..."
+        kubectl rollout status deployment/rwwwrse -n ${{ needs.load-config.outputs.namespace }} --timeout=300s
+        
+        echo "Rollback completed"
+
+    - name: Verify rollback
+      run: |
+        BASE_URL="https://${{ needs.load-config.outputs.ingress-host }}"
+        
+        echo "Verifying rollback..."
+        sleep 30
+        
+        if curl -f --retry 5 --retry-delay 10 "$BASE_URL/health"; then
+          echo "✅ Rollback successful - application is healthy"
+        else
+          echo "❌ Rollback verification failed"
+          exit 1
+        fi
+
+  # Notification
+  notify:
+    name: Send Deployment Notification
+    runs-on: ubuntu-latest
+    needs: [load-config, deploy, post-deployment-tests, rollback]
+    if: always()
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Determine notification status
+      id: status
+      run: |
+        if [ "${{ needs.deploy.result }}" = "success" ] && [ "${{ needs.post-deployment-tests.result }}" != "failure" ]; then
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "message=Deployment to ${{ inputs.environment }} completed successfully" >> $GITHUB_OUTPUT
+        elif [ "${{ needs.rollback.result }}" = "success" ]; then
+          echo "status=warning" >> $GITHUB_OUTPUT
+          echo "message=Deployment to ${{ inputs.environment }} failed but rollback was successful" >> $GITHUB_OUTPUT
+        else
+          echo "status=failure" >> $GITHUB_OUTPUT
+          echo "message=Deployment to ${{ inputs.environment }} failed" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Send notification
+      uses: ./.github/actions/notify-slack
+      with:
+        status: ${{ steps.status.outputs.status }}
+        environment: ${{ inputs.environment }}
+        image-tag: ${{ inputs.image-tag }}
+        deployment-url: https://${{ needs.load-config.outputs.ingress-host }}
+        message: ${{ steps.status.outputs.message }}
+        webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}

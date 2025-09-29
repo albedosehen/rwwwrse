@@ -1,0 +1,397 @@
+name: 'Deploy to Synology NAS'
+description: 'Deploy rwwwrse application to Synology NAS using Docker Compose'
+author: 'rwwwrse CI/CD Team'
+
+inputs:
+  image-tag:
+    description: 'Docker image tag to deploy'
+    required: true
+  image-digest:
+    description: 'Container image digest for verification'
+    required: false
+  skip-build:
+    description: 'Skip local docker build step'
+    required: false
+    default: 'false'
+  compose-file:
+    description: 'Docker Compose file to use'
+    required: false
+    default: 'docker-compose.deploy.yml'
+  project-name:
+    description: 'Docker Compose project name'
+    required: false
+    default: 'rwwwrse'
+  health-check-host:
+    description: 'Host for health checks'
+    required: false
+    default: 'localhost'
+  health-check-port:
+    description: 'Port for health checks'
+    required: false
+    default: '8080'
+  health-check-timeout:
+    description: 'Health check timeout in seconds'
+    required: false
+    default: '180'
+  deployment-timeout:
+    description: 'Deployment timeout in minutes'
+    required: false
+    default: '30'
+
+outputs:
+  deployment-status:
+    description: 'Status of the deployment (success/failure)'
+    value: ${{ steps.deployment-result.outputs.status }}
+  deployment-url:
+    description: 'URL of the deployed application'
+    value: 'http://${{ inputs.health-check-host }}:${{ inputs.health-check-port }}'
+  container-id:
+    description: 'ID of the deployed container'
+    value: ${{ steps.deployment-result.outputs.container-id }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate inputs
+      shell: bash
+      run: |
+        echo "=== Validating Deployment Inputs ==="
+        echo "Image tag: ${{ inputs.image-tag }}"
+        echo "Skip build: ${{ inputs.skip-build }}"
+        echo "Compose file: ${{ inputs.compose-file }}"
+        echo "Project name: ${{ inputs.project-name }}"
+        echo "Health check: ${{ inputs.health-check-host }}:${{ inputs.health-check-port }}"
+        
+        # Validate required inputs
+        if [ -z "${{ inputs.image-tag }}" ]; then
+          echo "ERROR: image-tag is required"
+          exit 1
+        fi
+        
+        # Validate compose file exists
+        if [ ! -f "${{ inputs.compose-file }}" ]; then
+          echo "ERROR: Compose file not found: ${{ inputs.compose-file }}"
+          exit 1
+        fi
+        
+        echo "✅ Input validation passed"
+
+    - name: Verify repository structure
+      shell: bash
+      run: |
+        echo "=== Repository Structure Verification ==="
+        echo "Current working directory: $(pwd)"
+        echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+
+        echo "Repository root contents:"
+        ls -la
+
+        echo "Checking for required files:"
+        REQUIRED_FILES=(
+          "Dockerfile"
+          "${{ inputs.compose-file }}"
+          "go.mod"
+          "go.sum"
+          "cmd/rwwwrse/main.go"
+        )
+
+        for file in "${REQUIRED_FILES[@]}"; do
+          if [ -f "$file" ]; then
+            echo "✅ $file exists"
+          else
+            echo "ERROR: Required file missing: $file"
+            exit 1
+          fi
+        done
+
+        echo "Checking for cmd/rwwwrse directory:"
+        if [ -d "cmd/rwwwrse" ]; then
+          echo "✅ cmd/rwwwrse directory exists"
+          ls -la cmd/rwwwrse/
+        else
+          echo "ERROR: cmd/rwwwrse directory not found"
+          exit 1
+        fi
+
+        echo "Checking for internal directory:"
+        if [ -d "internal" ]; then
+          echo "✅ internal directory exists"
+          echo "Internal packages:"
+          ls -la internal/
+        else
+          echo "ERROR: internal directory not found"
+          exit 1
+        fi
+
+    - name: Show host information
+      shell: bash
+      run: |
+        echo "=== Host Information ==="
+        echo "Runner: $RUNNER_NAME"
+        echo "Branch: $GITHUB_REF_NAME"
+        echo "SHA: $GITHUB_SHA"
+        echo "System info:"
+        uname -a
+        echo "Docker version:"
+        docker --version || echo "Docker not available"
+        echo "Docker Compose version:"
+        docker compose version || echo "Docker Compose not available"
+
+    - name: Build docker image
+      if: inputs.skip-build != 'true'
+      shell: bash
+      env:
+        IMAGE_NAME: rwwwrse:${{ inputs.image-tag }}
+        VERSION: ${{ github.ref_name }}
+        COMMIT_SHA: ${{ github.sha }}
+        BUILD_DATE: ${{ github.run_id }}
+      run: |
+        echo "=== Building Docker Image ==="
+        echo "Building Docker image: ${IMAGE_NAME}"
+        
+        docker build --progress=plain \
+          --build-arg VERSION="${VERSION}" \
+          --build-arg COMMIT_SHA="${COMMIT_SHA}" \
+          --build-arg BUILD_DATE="${BUILD_DATE}" \
+          -t "${IMAGE_NAME}" \
+          -f Dockerfile \
+          .
+        
+        echo "Verifying built image:"
+        docker image ls "${IMAGE_NAME}" || true
+        
+        echo "✅ Docker image built successfully"
+
+    - name: Prepare deployment environment
+      shell: bash
+      run: |
+        echo "=== Preparing Deployment Environment ==="
+        echo "Creating required directories for bind mounts..."
+
+        # Debug path information
+        echo "=== Path Information ==="
+        echo "Current working directory: $(pwd)"
+        echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+        echo "Runner name: $RUNNER_NAME"
+        echo "GITHUB_REPOSITORY: $GITHUB_REPOSITORY"
+        echo "GITHUB_REPOSITORY_NAME: ${GITHUB_REPOSITORY##*/}"
+
+        # Calculate the host filesystem path for bind mounts
+        # Runner's /_work maps to /volume1/docker/github-runner/_work on NAS host
+        RUNNER_WORK_DIR="/_work"
+        HOST_WORK_DIR="/volume1/docker/github-runner/_work"
+
+        # Get the relative path from runner's work directory to current directory
+        CURRENT_DIR="$(pwd)"
+        RELATIVE_PATH="${CURRENT_DIR#$RUNNER_WORK_DIR/}"
+
+        echo "=== Path Calculation ==="
+        echo "Runner work directory: $RUNNER_WORK_DIR"
+        echo "Host work directory: $HOST_WORK_DIR"
+        echo "Current directory: $CURRENT_DIR"
+        echo "Relative path: $RELATIVE_PATH"
+
+        # Construct the host filesystem path
+        HOST_PROJECT_PATH="$HOST_WORK_DIR/$RELATIVE_PATH"
+        HOST_RWWWRSE_CERTS_PATH="$HOST_PROJECT_PATH/docker-data/certs"
+        HOST_RWWWRSE_LOGS_PATH="$HOST_PROJECT_PATH/docker-data/logs"
+
+        echo "Host project path: $HOST_PROJECT_PATH"
+        echo "Host rwwwrse certs path: $HOST_RWWWRSE_CERTS_PATH"
+        echo "Host rwwwrse logs path: $HOST_RWWWRSE_LOGS_PATH"
+
+        # Create the data directories at the host filesystem path
+        echo "Creating rwwwrse data directories..."
+        mkdir -p "$HOST_RWWWRSE_CERTS_PATH"
+        mkdir -p "$HOST_RWWWRSE_LOGS_PATH"
+        echo "✅ Created directory: $HOST_RWWWRSE_CERTS_PATH"
+        echo "✅ Created directory: $HOST_RWWWRSE_LOGS_PATH"
+
+        # Also create the directories in the runner's filesystem for consistency
+        mkdir -p docker-data/certs
+        mkdir -p docker-data/logs
+        echo "✅ Created runner directory: docker-data/certs"
+        echo "✅ Created runner directory: docker-data/logs"
+
+        # Set proper permissions for both directories
+        chmod 755 "$HOST_RWWWRSE_CERTS_PATH"
+        chmod 755 "$HOST_RWWWRSE_LOGS_PATH"
+        chmod 755 docker-data/certs
+        chmod 755 docker-data/logs
+        echo "✅ Set proper permissions for rwwwrse data directories"
+
+    - name: Validate Docker Compose configuration
+      shell: bash
+      run: |
+        echo "=== Docker Compose Configuration Validation ==="
+        
+        # Set environment variables for compose
+        export IMAGE_TAG="${{ inputs.image-tag }}"
+        export WORKSPACE_PATH="$GITHUB_WORKSPACE"
+        export DEPLOYMENT_MODE=production
+        
+        echo "Environment variables:"
+        echo "  IMAGE_TAG: $IMAGE_TAG"
+        echo "  WORKSPACE_PATH: $WORKSPACE_PATH"
+        echo "  DEPLOYMENT_MODE: $DEPLOYMENT_MODE"
+        
+        # Verify docker-compose configuration is valid
+        if ! docker compose -f "${{ inputs.compose-file }}" config >/dev/null 2>&1; then
+          echo "ERROR: Invalid docker-compose configuration"
+          docker compose -f "${{ inputs.compose-file }}" config || true
+          exit 1
+        fi
+        echo "✅ Docker Compose configuration is valid"
+
+    - name: Deploy with Docker Compose
+      shell: bash
+      env:
+        IMAGE_TAG: ${{ inputs.image-tag }}
+        WORKSPACE_PATH: ${{ github.workspace }}
+        DEPLOYMENT_MODE: production
+      run: |
+        echo "=== Starting Docker Compose Deployment ==="
+        
+        # Set deployment environment variables
+        export IMAGE_TAG
+        export WORKSPACE_PATH
+        export DEPLOYMENT_MODE
+        
+        echo "Deployment environment:"
+        echo "  IMAGE_TAG: $IMAGE_TAG"
+        echo "  WORKSPACE_PATH: $WORKSPACE_PATH"
+        echo "  DEPLOYMENT_MODE: $DEPLOYMENT_MODE"
+        
+        # Clean up any existing containers to prevent conflicts
+        echo "=== Cleaning Up Existing Deployment ==="
+        docker compose -f "${{ inputs.compose-file }}" down --remove-orphans || true
+        
+        # Pull latest images (ignore failures for local builds)
+        echo "=== Pulling Docker Images ==="
+        docker compose -f "${{ inputs.compose-file }}" pull --ignore-pull-failures || true
+        
+        # Deploy with comprehensive error handling
+        echo "=== Starting Docker Compose Deployment ==="
+        if ! docker compose -f "${{ inputs.compose-file }}" up -d --remove-orphans; then
+          echo "ERROR: Docker Compose deployment failed"
+          echo "Container logs:"
+          docker compose -f "${{ inputs.compose-file }}" logs || true
+          echo "Container status:"
+          docker ps -a --filter "name=${{ inputs.project-name }}" || true
+          exit 1
+        fi
+        
+        echo "✅ Docker Compose deployment started successfully"
+
+    - name: Wait for deployment
+      shell: bash
+      run: |
+        echo "=== Post-Deployment Verification ==="
+        echo "Container status:"
+        docker ps --filter "name=${{ inputs.project-name }}" --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
+        
+        # Wait for services to initialize
+        echo "Waiting for services to initialize..."
+        sleep 15
+        
+        # Check application container health
+        echo "=== Application Health Check ==="
+        if docker ps --filter "name=${{ inputs.project-name }}-app" --filter "status=running" | grep -q "${{ inputs.project-name }}-app"; then
+          echo "✅ Application container is running successfully"
+          
+          # Show recent logs for verification
+          echo "Recent application logs:"
+          docker logs "${{ inputs.project-name }}-app" --tail 20 || true
+        else
+          echo "ERROR: Application container failed to start or is not running"
+          echo "All containers status:"
+          docker ps -a --filter "name=${{ inputs.project-name }}"
+          echo "Application container logs:"
+          docker logs "${{ inputs.project-name }}-app" --tail 50 || true
+          echo "Docker Compose logs:"
+          docker compose -f "${{ inputs.compose-file }}" logs --tail 50 || true
+          exit 1
+        fi
+
+    - name: Health check verification
+      shell: bash
+      run: |
+        echo "=== Application Health Check Verification ==="
+        
+        # Wait for application to fully initialize
+        echo "Waiting for application to fully initialize..."
+        sleep 5
+        
+        # Check if application is responding on the expected port
+        echo "Checking application connectivity..."
+        MAX_RETRIES=6
+        RETRY_COUNT=0
+        
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+          if curl -fsS --connect-timeout 5 --max-time 10 "http://${{ inputs.health-check-host }}:${{ inputs.health-check-port }}/health" >/dev/null 2>&1; then
+            echo "✅ Application health check passed"
+            break
+          else
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            echo "Health check attempt $RETRY_COUNT/$MAX_RETRIES failed, retrying in 10 seconds..."
+            
+            if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+              echo "ERROR: Application health check failed after $MAX_RETRIES attempts"
+              echo "Application container status:"
+              docker ps --filter "name=${{ inputs.project-name }}-app"
+              echo "Application logs:"
+              docker logs "${{ inputs.project-name }}-app" --tail 50 || true
+              echo "Network connectivity test:"
+              curl -v "http://${{ inputs.health-check-host }}:${{ inputs.health-check-port }}/health" || true
+              exit 1
+            fi
+            
+            sleep 10
+          fi
+        done
+
+    - name: Additional endpoint verification
+      shell: bash
+      run: |
+        echo "=== Additional Endpoint Verification ==="
+        
+        # Check if main application endpoint is accessible
+        echo "Testing main application endpoint..."
+        if curl -fsS --connect-timeout 5 --max-time 10 "http://${{ inputs.health-check-host }}:${{ inputs.health-check-port }}/" >/dev/null 2>&1; then
+          echo "✅ Main application endpoint is accessible"
+        else
+          echo "WARNING: Main application endpoint may not be fully ready"
+        fi
+        
+        # Check metrics endpoint
+        echo "Testing metrics endpoint..."
+        if curl -fsS --connect-timeout 5 --max-time 10 "http://${{ inputs.health-check-host }}:9090/metrics" >/dev/null 2>&1; then
+          echo "✅ Metrics endpoint is accessible"
+        else
+          echo "WARNING: Metrics endpoint may not be fully ready"
+        fi
+
+    - name: Set deployment result
+      id: deployment-result
+      shell: bash
+      run: |
+        echo "=== Deployment Summary ==="
+        echo "Deployment completed successfully at $(date)"
+        echo "Application URL: http://${{ inputs.health-check-host }}:${{ inputs.health-check-port }}"
+        echo "Health check endpoint: http://${{ inputs.health-check-host }}:${{ inputs.health-check-port }}/health"
+        echo "Metrics endpoint: http://${{ inputs.health-check-host }}:9090/metrics"
+        
+        echo "Active containers:"
+        docker ps --filter "name=${{ inputs.project-name }}" --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
+        
+        # Get container ID for output
+        CONTAINER_ID=$(docker ps --filter "name=${{ inputs.project-name }}-app" --format "{{.ID}}" | head -n1)
+        
+        echo "status=success" >> $GITHUB_OUTPUT
+        echo "container-id=$CONTAINER_ID" >> $GITHUB_OUTPUT
+        
+        echo "=== Deployment Verification Complete ==="
+
+branding:
+  icon: 'server'
+  color: 'blue'

@@ -1,0 +1,299 @@
+name: 'Monitoring and Alerting Integration'
+description: 'Comprehensive monitoring integration with health checks, metrics collection, and alerting'
+
+inputs:
+  operation:
+    description: 'Operation being monitored (deployment, test, build, etc.)'
+    required: true
+  environment:
+    description: 'Target environment'
+    required: true
+  service-name:
+    description: 'Name of the service being monitored'
+    required: false
+    default: 'rwwwrse'
+  health-endpoints:
+    description: 'JSON array of health check endpoints'
+    required: false
+    default: '["/health", "/metrics", "/ready"]'
+  base-url:
+    description: 'Base URL for health checks'
+    required: false
+  timeout:
+    description: 'Health check timeout in seconds'
+    required: false
+    default: '30'
+  retry-count:
+    description: 'Number of health check retries'
+    required: false
+    default: '5'
+  retry-interval:
+    description: 'Interval between retries in seconds'
+    required: false
+    default: '10'
+  monitoring-webhook:
+    description: 'Webhook URL for monitoring system integration'
+    required: false
+  correlation-id:
+    description: 'Correlation ID for tracking'
+    required: false
+
+outputs:
+  health-status:
+    description: 'Overall health check status'
+    value: ${{ steps.health-check.outputs.status }}
+  failed-endpoints:
+    description: 'List of failed health check endpoints'
+    value: ${{ steps.health-check.outputs.failed-endpoints }}
+  response-times:
+    description: 'Response times for health checks'
+    value: ${{ steps.health-check.outputs.response-times }}
+  alerts-triggered:
+    description: 'Number of alerts triggered'
+    value: ${{ steps.alerting.outputs.triggered }}
+
+runs:
+  using: 'composite'
+  steps:
+  - name: Setup monitoring context
+    id: setup
+    shell: bash
+    run: |
+      echo "Setting up monitoring context..."
+      
+      if [ -z "${{ inputs.correlation-id }}" ]; then
+        CORRELATION_ID="mon-$(date +%s)-$(uuidgen | cut -d'-' -f1)"
+      else
+        CORRELATION_ID="${{ inputs.correlation-id }}"
+      fi
+      
+      echo "correlation-id=$CORRELATION_ID" >> $GITHUB_OUTPUT
+      echo "CORRELATION_ID=$CORRELATION_ID" >> $GITHUB_ENV
+      
+      mkdir -p .monitoring
+      echo "$(date +%s)" > .monitoring/start-time
+      
+      echo "✅ Monitoring context initialized"
+      echo "Operation: ${{ inputs.operation }}"
+      echo "Environment: ${{ inputs.environment }}"
+      echo "Service: ${{ inputs.service-name }}"
+      echo "Correlation ID: $CORRELATION_ID"
+
+  - name: Determine health check URLs
+    id: urls
+    shell: bash
+    run: |
+      echo "Determining health check URLs..."
+      
+      BASE_URL="${{ inputs.base-url }}"
+      
+      if [ -z "$BASE_URL" ]; then
+        case "${{ inputs.environment }}" in
+          "development")
+            BASE_URL="https://dev.rwwwrse.example.com"
+            ;;
+          "staging")
+            BASE_URL="https://staging.rwwwrse.example.com"
+            ;;
+          "production")
+            BASE_URL="https://rwwwrse.example.com"
+            ;;
+          "synology")
+            BASE_URL="http://localhost:8080"
+            ;;
+          *)
+            BASE_URL="http://localhost:8080"
+            ;;
+        esac
+      fi
+      
+      echo "base-url=$BASE_URL" >> $GITHUB_OUTPUT
+      echo "BASE_URL=$BASE_URL" >> $GITHUB_ENV
+      echo "Base URL determined: $BASE_URL"
+
+  - name: Execute health checks
+    id: health-check
+    shell: bash
+    run: |
+      echo "Executing health checks..."
+      
+      ENDPOINTS='${{ inputs.health-endpoints }}'
+      TIMEOUT=${{ inputs.timeout }}
+      RETRY_COUNT=${{ inputs.retry-count }}
+      RETRY_INTERVAL=${{ inputs.retry-interval }}
+      
+      OVERALL_STATUS="healthy"
+      FAILED_ENDPOINTS=""
+      RESPONSE_TIMES=""
+      
+      # Simple endpoint check (avoiding complex JSON parsing)
+      for ENDPOINT in "/health" "/metrics" "/ready"; do
+        echo "Checking endpoint: $ENDPOINT"
+        
+        ENDPOINT_URL="${BASE_URL}${ENDPOINT}"
+        ENDPOINT_STATUS="failed"
+        ATTEMPT=1
+        
+        while [ $ATTEMPT -le $RETRY_COUNT ]; do
+          echo "Attempt $ATTEMPT/$RETRY_COUNT for $ENDPOINT"
+          
+          START_TIME=$(date +%s)
+          
+          if curl -f --max-time $TIMEOUT --silent --output /dev/null "$ENDPOINT_URL"; then
+            END_TIME=$(date +%s)
+            RESPONSE_TIME=$((END_TIME - START_TIME))
+            
+            echo "✅ $ENDPOINT: OK (${RESPONSE_TIME}s)"
+            ENDPOINT_STATUS="healthy"
+            RESPONSE_TIMES="$RESPONSE_TIMES$ENDPOINT:${RESPONSE_TIME}s,"
+            break
+          else
+            echo "❌ $ENDPOINT: Failed (attempt $ATTEMPT)"
+            
+            if [ $ATTEMPT -lt $RETRY_COUNT ]; then
+              echo "Retrying in ${RETRY_INTERVAL}s..."
+              sleep $RETRY_INTERVAL
+            fi
+          fi
+          
+          ATTEMPT=$((ATTEMPT + 1))
+        done
+        
+        if [ "$ENDPOINT_STATUS" = "failed" ]; then
+          OVERALL_STATUS="unhealthy"
+          FAILED_ENDPOINTS="$FAILED_ENDPOINTS$ENDPOINT,"
+        fi
+      done
+      
+      # Clean up trailing commas
+      FAILED_ENDPOINTS=$(echo "$FAILED_ENDPOINTS" | sed 's/,$//')
+      RESPONSE_TIMES=$(echo "$RESPONSE_TIMES" | sed 's/,$//')
+      
+      echo "status=$OVERALL_STATUS" >> $GITHUB_OUTPUT
+      echo "failed-endpoints=$FAILED_ENDPOINTS" >> $GITHUB_OUTPUT
+      echo "response-times=$RESPONSE_TIMES" >> $GITHUB_OUTPUT
+      
+      echo "HEALTH_STATUS=$OVERALL_STATUS" >> $GITHUB_ENV
+      echo "FAILED_ENDPOINTS=$FAILED_ENDPOINTS" >> $GITHUB_ENV
+      
+      echo "📊 Health Check Summary:"
+      echo "- Overall Status: $OVERALL_STATUS"
+      echo "- Failed Endpoints: $FAILED_ENDPOINTS"
+      echo "- Response Times: $RESPONSE_TIMES"
+
+  - name: Process alerting rules
+    id: alerting
+    shell: bash
+    run: |
+      echo "Processing alerting rules..."
+      
+      ALERTS_TRIGGERED=0
+      
+      # Count failed endpoints
+      if [ -n "$FAILED_ENDPOINTS" ]; then
+        FAILED_COUNT=$(echo "$FAILED_ENDPOINTS" | tr ',' '\n' | wc -l)
+      else
+        FAILED_COUNT=0
+      fi
+      
+      # Check service down alert
+      if [ "$HEALTH_STATUS" = "unhealthy" ]; then
+        echo "🚨 ALERT: Service Down - ${{ inputs.service-name }} in ${{ inputs.environment }}"
+        ALERTS_TRIGGERED=$((ALERTS_TRIGGERED + 1))
+        echo "service_down" > .monitoring/alert-service-down
+      fi
+      
+      # Check multiple endpoint failures
+      if [ $FAILED_COUNT -gt 1 ]; then
+        echo "🚨 ALERT: Multiple Endpoint Failures - $FAILED_COUNT endpoints failing"
+        ALERTS_TRIGGERED=$((ALERTS_TRIGGERED + 1))
+        echo "multiple_failures" > .monitoring/alert-multiple-failures
+      fi
+      
+      echo "triggered=$ALERTS_TRIGGERED" >> $GITHUB_OUTPUT
+      echo "ALERTS_TRIGGERED=$ALERTS_TRIGGERED" >> $GITHUB_ENV
+      echo "📢 Alerting Summary: $ALERTS_TRIGGERED alerts triggered"
+
+  - name: Send monitoring data
+    id: external-integration
+    if: inputs.monitoring-webhook != ''
+    shell: bash
+    run: |
+      echo "Sending monitoring data to external systems..."
+      
+      # Create simple monitoring payload
+      cat > monitoring-payload.json << 'PAYLOAD_EOF'
+      {
+        "monitoring_event": {
+          "operation": "${{ inputs.operation }}",
+          "environment": "${{ inputs.environment }}",
+          "service": "${{ inputs.service-name }}",
+          "correlation_id": "$CORRELATION_ID",
+          "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "health_status": "$HEALTH_STATUS",
+          "failed_endpoints": "$FAILED_ENDPOINTS",
+          "alerts_triggered": $ALERTS_TRIGGERED
+        }
+      }
+      PAYLOAD_EOF
+      
+      # Send to monitoring webhook
+      if curl -X POST \
+        -H "Content-Type: application/json" \
+        -d @monitoring-payload.json \
+        "${{ inputs.monitoring-webhook }}" \
+        --max-time 30 \
+        --retry 3; then
+        echo "✅ Monitoring data sent successfully"
+      else
+        echo "❌ Failed to send monitoring data"
+      fi
+
+  - name: Create monitoring summary
+    if: always()
+    shell: bash
+    run: |
+      echo "## Monitoring and Alerting Summary" >> $GITHUB_STEP_SUMMARY
+      echo "" >> $GITHUB_STEP_SUMMARY
+      echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+      echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+      echo "| Operation | ${{ inputs.operation }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Environment | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Service | ${{ inputs.service-name }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Correlation ID | $CORRELATION_ID |" >> $GITHUB_STEP_SUMMARY
+      echo "| Base URL | $BASE_URL |" >> $GITHUB_STEP_SUMMARY
+      echo "| Health Status | ${{ steps.health-check.outputs.status || 'unknown' }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Alerts Triggered | ${{ steps.alerting.outputs.triggered || '0' }} |" >> $GITHUB_STEP_SUMMARY
+      
+      if [ -n "${{ steps.health-check.outputs.failed-endpoints }}" ]; then
+        echo "| Failed Endpoints | ${{ steps.health-check.outputs.failed-endpoints }} |" >> $GITHUB_STEP_SUMMARY
+      fi
+      
+      if [ -n "${{ steps.health-check.outputs.response-times }}" ]; then
+        echo "| Response Times | ${{ steps.health-check.outputs.response-times }} |" >> $GITHUB_STEP_SUMMARY
+      fi
+      
+      echo "" >> $GITHUB_STEP_SUMMARY
+      
+      if [ "${{ steps.health-check.outputs.status }}" = "healthy" ]; then
+        echo "### ✅ Service Health: Healthy" >> $GITHUB_STEP_SUMMARY
+        echo "All health check endpoints are responding normally." >> $GITHUB_STEP_SUMMARY
+      else
+        echo "### ❌ Service Health: Unhealthy" >> $GITHUB_STEP_SUMMARY
+        echo "One or more health check endpoints are failing." >> $GITHUB_STEP_SUMMARY
+        
+        if [ -n "${{ steps.health-check.outputs.failed-endpoints }}" ]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Failed Endpoints:** ${{ steps.health-check.outputs.failed-endpoints }}" >> $GITHUB_STEP_SUMMARY
+        fi
+      fi
+      
+      if [ "${{ steps.alerting.outputs.triggered }}" != "0" ]; then
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "🚨 **${{ steps.alerting.outputs.triggered }} alert(s) were triggered during monitoring.**" >> $GITHUB_STEP_SUMMARY
+      fi
+      
+      if [ "${{ inputs.monitoring-webhook }}" != "" ]; then
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "📊 **Monitoring data has been sent to external monitoring system.**" >> $GITHUB_STEP_SUMMARY
+      fi

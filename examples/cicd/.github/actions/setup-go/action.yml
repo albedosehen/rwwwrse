@@ -1,0 +1,97 @@
+name: 'Setup Go Environment'
+description: 'Set up Go development environment with caching and dependency management'
+
+inputs:
+  go-version:
+    description: 'Go version to install'
+    required: false
+    default: '1.21'
+  cache-dependency-path:
+    description: 'Path to go.sum file for cache key'
+    required: false
+    default: 'go.sum'
+  working-directory:
+    description: 'Working directory for Go commands'
+    required: false
+    default: '.'
+
+outputs:
+  go-version:
+    description: 'The installed Go version'
+    value: ${{ steps.setup.outputs.go-version }}
+  cache-hit:
+    description: 'Whether cache was hit'
+    value: ${{ steps.cache.outputs.cache-hit }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Go
+      id: setup
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ inputs.go-version }}
+        cache: true
+        cache-dependency-path: ${{ inputs.working-directory }}/${{ inputs.cache-dependency-path }}
+
+    - name: Verify Go installation
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "Go version: $(go version)"
+        echo "GOPATH: $GOPATH"
+        echo "GOROOT: $GOROOT"
+        echo "GOCACHE: $(go env GOCACHE)"
+
+    - name: Download and verify dependencies
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "Downloading Go dependencies..."
+        go mod download
+        
+        echo "Verifying Go dependencies..."
+        go mod verify
+        
+        echo "Tidying Go modules..."
+        go mod tidy
+        
+        # Check if go.mod or go.sum changed
+        if ! git diff --quiet go.mod go.sum 2>/dev/null; then
+          echo "⚠️ Warning: go.mod or go.sum files have changes after 'go mod tidy'"
+          echo "Consider running 'go mod tidy' locally and committing the changes"
+          git diff go.mod go.sum || true
+        else
+          echo "✅ Go modules are clean and up to date"
+        fi
+
+    - name: Cache Go build cache
+      id: cache
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ inputs.go-version }}-${{ hashFiles(format('{0}/{1}', inputs.working-directory, inputs.cache-dependency-path)) }}
+        restore-keys: |
+          ${{ runner.os }}-go-${{ inputs.go-version }}-
+          ${{ runner.os }}-go-
+
+    - name: Display dependency information
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "## Go Environment Information" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **Go Version**: $(go version | cut -d' ' -f3)" >> $GITHUB_STEP_SUMMARY
+        echo "- **GOOS**: $(go env GOOS)" >> $GITHUB_STEP_SUMMARY
+        echo "- **GOARCH**: $(go env GOARCH)" >> $GITHUB_STEP_SUMMARY
+        echo "- **Cache Hit**: ${{ steps.cache.outputs.cache-hit }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ -f go.mod ]; then
+          echo "### Go Module Information" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          head -10 go.mod >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        fi

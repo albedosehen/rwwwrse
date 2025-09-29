@@ -1,0 +1,150 @@
+name: Test Workflow
+
+# Reusable workflow for running tests and quality checks
+on:
+  workflow_call:
+    inputs:
+      go-version:
+        description: 'Go version to use'
+        required: false
+        type: string
+        default: '1.21'
+      upload-coverage:
+        description: 'Whether to upload coverage to Codecov'
+        required: false
+        type: boolean
+        default: true
+      timeout-minutes:
+        description: 'Timeout for the workflow in minutes'
+        required: false
+        type: number
+        default: 15
+    outputs:
+      coverage:
+        description: 'Test coverage percentage'
+        value: ${{ jobs.test.outputs.coverage }}
+      test-result:
+        description: 'Test execution result'
+        value: ${{ jobs.test.outputs.test-result }}
+
+jobs:
+  test:
+    name: Test and Quality Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    
+    outputs:
+      coverage: ${{ steps.coverage.outputs.coverage }}
+      test-result: ${{ steps.test.outputs.result }}
+      
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Go environment
+      uses: ./.github/actions/setup-go
+      with:
+        go-version: ${{ inputs.go-version }}
+
+    - name: Run code formatting check
+      id: format
+      run: |
+        echo "Checking code formatting with gofmt..."
+        if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+          echo "❌ Code not formatted properly:"
+          gofmt -s -l .
+          echo "result=failure" >> $GITHUB_OUTPUT
+          exit 1
+        else
+          echo "✅ Code formatting is correct"
+          echo "result=success" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Run go vet
+      id: vet
+      run: |
+        echo "Running go vet static analysis..."
+        if go vet ./...; then
+          echo "✅ go vet passed"
+          echo "result=success" >> $GITHUB_OUTPUT
+        else
+          echo "❌ go vet failed"
+          echo "result=failure" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+    - name: Install and run golangci-lint
+      uses: golangci/golangci-lint-action@v3
+      with:
+        version: latest
+        args: --timeout=5m --verbose
+
+    - name: Run tests with race detection
+      id: test
+      run: |
+        echo "Running tests with race detection and coverage..."
+        if go test -v -race -coverprofile=coverage.out -covermode=atomic ./...; then
+          echo "✅ Tests passed"
+          echo "result=success" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Tests failed"
+          echo "result=failure" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+    - name: Calculate test coverage
+      id: coverage
+      run: |
+        if [ -f coverage.out ]; then
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print substr($3, 1, length($3)-1)}')
+          echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
+          echo "📊 Test coverage: $COVERAGE%"
+          
+          # Add coverage to job summary
+          echo "## Test Coverage Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Total Coverage: $COVERAGE%**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Coverage by Package" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          go tool cover -func=coverage.out >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "coverage=0" >> $GITHUB_OUTPUT
+          echo "⚠️ No coverage file generated"
+        fi
+
+    - name: Upload coverage to Codecov
+      if: inputs.upload-coverage && success()
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.out
+        fail_ci_if_error: false
+        verbose: true
+        flags: unittests
+        name: codecov-umbrella
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-results
+        path: |
+          coverage.out
+          test-results.xml
+        retention-days: 30
+
+    - name: Test summary
+      if: always()
+      run: |
+        echo "## Test Results Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Code Formatting | ${{ steps.format.outputs.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Static Analysis (go vet) | ${{ steps.vet.outputs.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Linting (golangci-lint) | ${{ job.status == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Unit Tests | ${{ steps.test.outputs.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Coverage | ${{ steps.coverage.outputs.coverage }}% |" >> $GITHUB_STEP_SUMMARY

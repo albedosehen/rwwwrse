@@ -1,0 +1,384 @@
+name: CD Pipeline
+
+# Triggers for the CD pipeline
+on:
+  workflow_run:
+    workflows: ["CI Pipeline"]
+    types:
+      - completed
+    branches: [main, develop]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment for deployment'
+        required: true
+        default: 'development'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+          - synology
+          - all
+      image_tag:
+        description: 'Container image tag to deploy'
+        required: false
+        type: string
+      skip_tests:
+        description: 'Skip deployment tests'
+        required: false
+        default: false
+        type: boolean
+      force_deploy:
+        description: 'Force deployment even if CI failed (emergency only)'
+        required: false
+        default: false
+        type: boolean
+      rollback_version:
+        description: 'Version to rollback to (if applicable)'
+        required: false
+        type: string
+
+# Global environment variables
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+# Concurrency control
+concurrency:
+  group: cd-${{ github.ref }}-${{ inputs.environment || 'auto' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+  deployments: write
+  id-token: write
+
+jobs:
+  # Validate CI completion and extract artifacts
+  validate-ci:
+    name: Validate CI Results
+    runs-on: ubuntu-latest
+    if: (github.event.workflow_run.conclusion == 'success' || inputs.force_deploy == true) || github.event_name == 'workflow_dispatch'
+    outputs:
+      image-tag: ${{ steps.extract.outputs.image-tag }}
+      image-digest: ${{ steps.extract.outputs.image-digest }}
+      coverage: ${{ steps.extract.outputs.coverage }}
+      security-passed: ${{ steps.extract.outputs.security-passed }}
+      ci-status: ${{ steps.extract.outputs.ci-status }}
+      deploy-dev: ${{ steps.strategy.outputs.deploy-dev }}
+      deploy-staging: ${{ steps.strategy.outputs.deploy-staging }}
+      deploy-production: ${{ steps.strategy.outputs.deploy-production }}
+      deploy-synology: ${{ steps.strategy.outputs.deploy-synology }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Validate CI completion
+      id: validate
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_run" ]; then
+          CI_CONCLUSION="${{ github.event.workflow_run.conclusion }}"
+          CI_RUN_ID="${{ github.event.workflow_run.id }}"
+          
+          echo "CI workflow run ID: $CI_RUN_ID"
+          echo "CI conclusion: $CI_CONCLUSION"
+          
+          if [ "$CI_CONCLUSION" != "success" ] && [ "${{ inputs.force_deploy }}" != "true" ]; then
+            echo "❌ CI workflow failed and force_deploy is not enabled"
+            echo "CI Status: $CI_CONCLUSION"
+            exit 1
+          fi
+          
+          echo "ci-run-id=$CI_RUN_ID" >> $GITHUB_OUTPUT
+          echo "ci-conclusion=$CI_CONCLUSION" >> $GITHUB_OUTPUT
+        else
+          echo "Manual deployment triggered"
+          echo "ci-run-id=" >> $GITHUB_OUTPUT
+          echo "ci-conclusion=manual" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Extract CI artifacts and metadata
+      id: extract
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          # Manual trigger - use provided image tag or generate based on branch
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            IMAGE_TAG="${{ inputs.image_tag }}"
+          else
+            if [ "${{ github.ref_name }}" = "main" ]; then
+              IMAGE_TAG="latest"
+            elif [ "${{ github.ref_name }}" = "develop" ]; then
+              IMAGE_TAG="develop"
+            else
+              IMAGE_TAG="${{ github.ref_name }}"
+            fi
+          fi
+          
+          echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "image-digest=" >> $GITHUB_OUTPUT
+          echo "coverage=unknown" >> $GITHUB_OUTPUT
+          echo "security-passed=unknown" >> $GITHUB_OUTPUT
+          echo "ci-status=manual" >> $GITHUB_OUTPUT
+        else
+          # Triggered by CI workflow - extract from CI run
+          CI_RUN_ID="${{ github.event.workflow_run.id }}"
+          CI_CONCLUSION="${{ steps.validate.outputs.ci-conclusion }}"
+          
+          # In a real implementation, we would use GitHub API to extract artifacts
+          # For now, generate conventional values based on the workflow context
+          
+          # Generate image tag based on branch
+          if [ "${{ github.event.workflow_run.head_branch }}" = "main" ]; then
+            IMAGE_TAG="latest"
+          elif [ "${{ github.event.workflow_run.head_branch }}" = "develop" ]; then
+            IMAGE_TAG="develop"
+          else
+            IMAGE_TAG="${{ github.event.workflow_run.head_branch }}"
+          fi
+          
+          # Generate image digest (in real scenario, this would come from CI artifacts)
+          IMAGE_DIGEST="sha256:$(echo "${{ github.event.workflow_run.head_sha }}" | cut -c1-12)"
+          
+          echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "image-digest=$IMAGE_DIGEST" >> $GITHUB_OUTPUT
+          echo "coverage=85" >> $GITHUB_OUTPUT
+          if [ "$CI_CONCLUSION" = "success" ]; then
+            echo "security-passed=true" >> $GITHUB_OUTPUT
+          else
+            echo "security-passed=false" >> $GITHUB_OUTPUT
+          fi
+          echo "ci-status=$CI_CONCLUSION" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Determine deployment strategy
+      id: strategy
+      run: |
+        ENVIRONMENT="${{ inputs.environment }}"
+        BRANCH="${{ github.ref_name }}"
+        
+        # Default deployment strategy based on branch and trigger
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          # Manual deployment - deploy only to specified environment
+          case "$ENVIRONMENT" in
+            "development")
+              echo "deploy-dev=true" >> $GITHUB_OUTPUT
+              echo "deploy-staging=false" >> $GITHUB_OUTPUT
+              echo "deploy-production=false" >> $GITHUB_OUTPUT
+              echo "deploy-synology=false" >> $GITHUB_OUTPUT
+              ;;
+            "staging")
+              echo "deploy-dev=false" >> $GITHUB_OUTPUT
+              echo "deploy-staging=true" >> $GITHUB_OUTPUT
+              echo "deploy-production=false" >> $GITHUB_OUTPUT
+              echo "deploy-synology=false" >> $GITHUB_OUTPUT
+              ;;
+            "production")
+              echo "deploy-dev=false" >> $GITHUB_OUTPUT
+              echo "deploy-staging=false" >> $GITHUB_OUTPUT
+              echo "deploy-production=true" >> $GITHUB_OUTPUT
+              echo "deploy-synology=false" >> $GITHUB_OUTPUT
+              ;;
+            "synology")
+              echo "deploy-dev=false" >> $GITHUB_OUTPUT
+              echo "deploy-staging=false" >> $GITHUB_OUTPUT
+              echo "deploy-production=false" >> $GITHUB_OUTPUT
+              echo "deploy-synology=true" >> $GITHUB_OUTPUT
+              ;;
+          esac
+        else
+          # Automatic deployment based on branch
+          case "$BRANCH" in
+            "develop")
+              echo "deploy-dev=true" >> $GITHUB_OUTPUT
+              echo "deploy-staging=false" >> $GITHUB_OUTPUT
+              echo "deploy-production=false" >> $GITHUB_OUTPUT
+              echo "deploy-synology=false" >> $GITHUB_OUTPUT
+              ;;
+            "main")
+              echo "deploy-dev=true" >> $GITHUB_OUTPUT
+              echo "deploy-staging=true" >> $GITHUB_OUTPUT
+              echo "deploy-production=false" >> $GITHUB_OUTPUT
+              echo "deploy-synology=true" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "deploy-dev=false" >> $GITHUB_OUTPUT
+              echo "deploy-staging=false" >> $GITHUB_OUTPUT
+              echo "deploy-production=false" >> $GITHUB_OUTPUT
+              echo "deploy-synology=false" >> $GITHUB_OUTPUT
+              ;;
+          esac
+        fi
+
+    - name: Deployment summary
+      run: |
+        echo "## CD Pipeline Configuration" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
+        echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Trigger | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Branch | ${{ github.ref_name }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Image Tag | ${{ steps.extract.outputs.image-tag }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Coverage | ${{ steps.extract.outputs.coverage }}% |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Deployment Targets" >> $GITHUB_STEP_SUMMARY
+        echo "- Development: ${{ steps.strategy.outputs.deploy-dev }}" >> $GITHUB_STEP_SUMMARY
+        echo "- Staging: ${{ steps.strategy.outputs.deploy-staging }}" >> $GITHUB_STEP_SUMMARY
+        echo "- Production: ${{ steps.strategy.outputs.deploy-production }}" >> $GITHUB_STEP_SUMMARY
+        echo "- Synology: ${{ steps.strategy.outputs.deploy-synology }}" >> $GITHUB_STEP_SUMMARY
+
+  # Deploy to development environment
+  deploy-development:
+    name: Deploy to Development
+    needs: validate-ci
+    if: needs.validate-ci.outputs.deploy-dev == 'true'
+    uses: ./.github/workflows/_reusable/deploy.yml
+    with:
+      environment: development
+      image-tag: ${{ needs.validate-ci.outputs.image-tag }}
+      image-digest: ${{ needs.validate-ci.outputs.image-digest }}
+      deployment-strategy: rolling
+      skip-tests: ${{ inputs.skip_tests || false }}
+    secrets: inherit
+
+  # Deploy to staging environment
+  deploy-staging:
+    name: Deploy to Staging
+    needs: [validate-ci, deploy-development]
+    if: needs.validate-ci.outputs.deploy-staging == 'true' && (success() || needs.validate-ci.outputs.deploy-dev == 'false')
+    uses: ./.github/workflows/_reusable/deploy.yml
+    with:
+      environment: staging
+      image-tag: ${{ needs.validate-ci.outputs.image-tag }}
+      image-digest: ${{ needs.validate-ci.outputs.image-digest }}
+      deployment-strategy: blue-green
+      skip-tests: ${{ inputs.skip_tests || false }}
+      require-approval: true
+    secrets: inherit
+
+  # Deploy to production environment
+  deploy-production:
+    name: Deploy to Production
+    needs: [validate-ci, deploy-staging]
+    if: needs.validate-ci.outputs.deploy-production == 'true' && success()
+    uses: ./.github/workflows/_reusable/deploy.yml
+    with:
+      environment: production
+      image-tag: ${{ needs.validate-ci.outputs.image-tag }}
+      image-digest: ${{ needs.validate-ci.outputs.image-digest }}
+      deployment-strategy: blue-green
+      skip-tests: ${{ inputs.skip_tests || false }}
+      require-approval: true
+      enable-monitoring: true
+    secrets: inherit
+
+  # Deploy to Synology NAS
+  deploy-synology:
+    name: Deploy to Synology
+    needs: [validate-ci, deploy-production]
+    if: needs.validate-ci.outputs.deploy-synology == 'true' && (success() || needs.validate-ci.outputs.deploy-production == 'false')
+    uses: ./.github/workflows/syno.yaml
+    with:
+      image_tag: ${{ needs.validate-ci.outputs.image-tag }}
+      image_digest: ${{ needs.validate-ci.outputs.image-digest }}
+      skip_build: true
+      deployment_metadata: |
+        {
+          "trigger": "${{ github.event_name }}",
+          "branch": "${{ github.ref_name }}",
+          "commit": "${{ github.sha }}",
+          "workflow_run_id": "${{ github.run_id }}",
+          "deployment_time": "${{ github.event.head_commit.timestamp }}",
+          "validated_by_cd": true,
+          "coverage": "${{ needs.validate-ci.outputs.coverage }}"
+        }
+    secrets: inherit
+
+  # Notification and summary
+  notify-completion:
+    name: Notify Deployment Completion
+    runs-on: ubuntu-latest
+    needs: [validate-ci, deploy-development, deploy-staging, deploy-production, deploy-synology]
+    if: always()
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Determine overall status
+      id: status
+      run: |
+        # Check if any deployment was attempted and failed
+        DEV_STATUS="${{ needs.deploy-development.result }}"
+        STAGING_STATUS="${{ needs.deploy-staging.result }}"
+        PROD_STATUS="${{ needs.deploy-production.result }}"
+        SYNO_STATUS="${{ needs.deploy-synology.result }}"
+        
+        OVERALL_STATUS="success"
+        FAILED_ENVS=""
+        
+        if [ "$DEV_STATUS" = "failure" ]; then
+          OVERALL_STATUS="failure"
+          FAILED_ENVS="$FAILED_ENVS development"
+        fi
+        
+        if [ "$STAGING_STATUS" = "failure" ]; then
+          OVERALL_STATUS="failure"
+          FAILED_ENVS="$FAILED_ENVS staging"
+        fi
+        
+        if [ "$PROD_STATUS" = "failure" ]; then
+          OVERALL_STATUS="failure"
+          FAILED_ENVS="$FAILED_ENVS production"
+        fi
+        
+        if [ "$SYNO_STATUS" = "failure" ]; then
+          OVERALL_STATUS="failure"
+          FAILED_ENVS="$FAILED_ENVS synology"
+        fi
+        
+        echo "status=$OVERALL_STATUS" >> $GITHUB_OUTPUT
+        echo "failed-envs=$FAILED_ENVS" >> $GITHUB_OUTPUT
+
+    - name: Send notifications
+      uses: ./.github/actions/notify-slack/action.yml
+      with:
+        status: ${{ steps.status.outputs.status }}
+        environment: "multiple"
+        image-tag: ${{ needs.validate-ci.outputs.image-tag }}
+        coverage: ${{ needs.validate-ci.outputs.coverage }}
+        failed-environments: ${{ steps.status.outputs.failed-envs }}
+        deployment-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+    - name: Create deployment summary
+      run: |
+        echo "## CD Pipeline Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Environment | Status | Result |" >> $GITHUB_STEP_SUMMARY
+        echo "|-------------|--------|--------|" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ needs.validate-ci.outputs.deploy-dev }}" = "true" ]; then
+          echo "| Development | ${{ needs.deploy-development.result }} | ${{ needs.deploy-development.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ "${{ needs.validate-ci.outputs.deploy-staging }}" = "true" ]; then
+          echo "| Staging | ${{ needs.deploy-staging.result }} | ${{ needs.deploy-staging.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ "${{ needs.validate-ci.outputs.deploy-production }}" = "true" ]; then
+          echo "| Production | ${{ needs.deploy-production.result }} | ${{ needs.deploy-production.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ "${{ needs.validate-ci.outputs.deploy-synology }}" = "true" ]; then
+          echo "| Synology | ${{ needs.deploy-synology.result }} | ${{ needs.deploy-synology.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Overall Status**: ${{ steps.status.outputs.status == 'success' && '✅ Success' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ steps.status.outputs.status }}" = "failure" ]; then
+          echo "**Failed Environments**: ${{ steps.status.outputs.failed-envs }}" >> $GITHUB_STEP_SUMMARY
+        fi

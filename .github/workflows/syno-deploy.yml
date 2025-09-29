@@ -1,0 +1,193 @@
+name: Synology Deployment
+
+on:
+  workflow_run:
+    workflows: ["CI Pipeline"]
+    types:
+      - completed
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Docker image tag to deploy'
+        required: false
+        default: 'latest'
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+concurrency:
+  group: synology-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  deploy:
+    name: Deploy to Synology NAS
+    runs-on: [self-hosted, synology, ds1520]
+    environment: syno
+    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 15
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set image tag
+      id: image
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          IMAGE_TAG="${{ inputs.image_tag }}"
+        else
+          IMAGE_TAG="latest"
+        fi
+        echo "tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+        echo "full_image=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+    - name: Validate Doppler configuration
+      env:
+        DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      run: |
+        if [ -z "$DOPPLER_TOKEN" ]; then
+          echo "❌ DOPPLER_TOKEN is not configured"
+          echo "Please add DOPPLER_TOKEN to GitHub repository secrets"
+          exit 1
+        fi
+        echo "✅ Doppler token is configured"
+
+    - name: Pull latest Docker image
+      run: |
+        echo "Pulling image: ${{ steps.image.outputs.full_image }}"
+        docker pull ${{ steps.image.outputs.full_image }}
+
+    - name: Stop existing containers
+      run: |
+        echo "Stopping existing rwwwrse containers..."
+        docker compose -f docker-compose.deploy.yml down --remove-orphans || true
+
+    - name: Deploy with Doppler secrets
+      env:
+        IMAGE_TAG: ${{ steps.image.outputs.tag }}
+        DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      run: |
+        echo "Starting deployment with Doppler configuration..."
+        
+        # Use Doppler to inject secrets and start the service
+        doppler run --token="$DOPPLER_TOKEN" -- \
+          docker compose -f docker-compose.deploy.yml up -d --remove-orphans
+        
+        echo "✅ Deployment started successfully"
+
+    - name: Wait for service to be ready
+      run: |
+        echo "Waiting for service to be ready..."
+        MAX_ATTEMPTS=30
+        ATTEMPT=1
+        
+        while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+          if curl -f -s http://localhost:8080/health >/dev/null 2>&1; then
+            echo "✅ Service is healthy and ready"
+            break
+          fi
+          
+          echo "Attempt $ATTEMPT/$MAX_ATTEMPTS: Service not ready yet, waiting 10 seconds..."
+          sleep 10
+          ATTEMPT=$((ATTEMPT + 1))
+        done
+        
+        if [ $ATTEMPT -gt $MAX_ATTEMPTS ]; then
+          echo "❌ Service failed to become ready within timeout"
+          echo "Container logs:"
+          docker logs rwwwrse-app --tail 50 || true
+          exit 1
+        fi
+
+    - name: Verify deployment
+      run: |
+        echo "Verifying deployment..."
+        
+        # Check container status
+        if ! docker ps --filter "name=rwwwrse-app" --filter "status=running" | grep -q rwwwrse-app; then
+          echo "❌ Container is not running"
+          docker ps -a --filter "name=rwwwrse-app"
+          docker logs rwwwrse-app --tail 50 || true
+          exit 1
+        fi
+        
+        # Check health endpoint
+        if ! curl -f -s http://localhost:8080/health; then
+          echo "❌ Health check failed"
+          exit 1
+        fi
+        
+        echo "✅ Deployment verification successful"
+
+    - name: Cleanup old images
+      run: |
+        echo "Cleaning up old Docker images..."
+        # Keep last 3 images, remove older ones
+        docker images ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} --format "table {{.Repository}}:{{.Tag}}\t{{.CreatedAt}}" | \
+          tail -n +2 | sort -k2 -r | tail -n +4 | awk '{print $1}' | \
+          xargs -r docker rmi || true
+        echo "✅ Cleanup completed"
+
+    - name: Create deployment summary
+      if: always()
+      run: |
+        echo "## Synology Deployment Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
+        echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Image | ${{ steps.image.outputs.full_image }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Status | ${{ job.status == 'success' && '✅ Success' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Environment | Synology NAS |" >> $GITHUB_STEP_SUMMARY
+        echo "| Secrets | Doppler |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ job.status }}" = "success" ]; then
+          echo "### ✅ Deployment Successful" >> $GITHUB_STEP_SUMMARY
+          echo "The rwwwrse reverse proxy has been successfully deployed to Synology NAS." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Service URLs:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Health Check: http://localhost:8080/health" >> $GITHUB_STEP_SUMMARY
+          echo "- Metrics: http://localhost:9090/metrics" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "### ❌ Deployment Failed" >> $GITHUB_STEP_SUMMARY
+          echo "The deployment encountered errors. Check the logs for details." >> $GITHUB_STEP_SUMMARY
+        fi
+
+  notify:
+    name: Notify Deployment Status
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: always()
+    
+    steps:
+    - name: Determine status
+      id: status
+      run: |
+        if [ "${{ needs.deploy.result }}" = "success" ]; then
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "message=✅ Synology deployment completed successfully" >> $GITHUB_OUTPUT
+        else
+          echo "status=failure" >> $GITHUB_OUTPUT
+          echo "message=❌ Synology deployment failed" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create notification summary
+      run: |
+        echo "## Deployment Notification" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "${{ steps.status.outputs.message }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Deployment Details:**" >> $GITHUB_STEP_SUMMARY
+        echo "- **Target**: Synology NAS" >> $GITHUB_STEP_SUMMARY
+        echo "- **Trigger**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Branch**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Workflow**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY

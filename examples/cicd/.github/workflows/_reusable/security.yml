@@ -1,0 +1,278 @@
+name: Security Workflow
+
+# Reusable workflow for security scanning and analysis
+on:
+  workflow_call:
+    inputs:
+      go-version:
+        description: 'Go version to use'
+        required: false
+        type: string
+        default: '1.21'
+      registry:
+        description: 'Container registry'
+        required: false
+        type: string
+        default: 'ghcr.io'
+      image-name:
+        description: 'Container image name'
+        required: false
+        type: string
+      run-codeql:
+        description: 'Whether to run CodeQL analysis'
+        required: false
+        type: boolean
+        default: true
+      run-dependency-review:
+        description: 'Whether to run dependency review'
+        required: false
+        type: boolean
+        default: false
+      run-container-scan:
+        description: 'Whether to scan container images'
+        required: false
+        type: boolean
+        default: true
+    outputs:
+      gosec-result:
+        description: 'Gosec scan result'
+        value: ${{ jobs.code-security.outputs.gosec-result }}
+      codeql-result:
+        description: 'CodeQL analysis result'
+        value: ${{ jobs.codeql.outputs.result }}
+      trivy-result:
+        description: 'Trivy container scan result'
+        value: ${{ jobs.container-security.outputs.trivy-result }}
+
+jobs:
+  # Code security scanning
+  code-security:
+    name: Code Security Scan
+    runs-on: ubuntu-latest
+    
+    outputs:
+      gosec-result: ${{ steps.gosec.outputs.result }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Go environment
+      uses: ./.github/actions/setup-go
+      with:
+        go-version: ${{ inputs.go-version }}
+
+    - name: Run gosec security scanner
+      id: gosec
+      run: |
+        echo "Running gosec security scanner..."
+        
+        # Install gosec
+        go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest
+        
+        # Run gosec with SARIF output
+        if gosec -fmt sarif -out gosec-results.sarif ./...; then
+          echo "✅ Gosec scan completed successfully"
+          echo "result=success" >> $GITHUB_OUTPUT
+        else
+          echo "⚠️ Gosec found security issues"
+          echo "result=warning" >> $GITHUB_OUTPUT
+        fi
+      continue-on-error: true
+
+    - name: Upload gosec SARIF results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: gosec-results.sarif
+        category: gosec
+      if: always()
+
+    - name: Upload gosec results as artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: gosec-results
+        path: gosec-results.sarif
+        retention-days: 30
+      if: always()
+
+  # CodeQL analysis
+  codeql:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    if: inputs.run-codeql
+    
+    outputs:
+      result: ${{ steps.analyze.outputs.result }}
+    
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v2
+      with:
+        languages: go
+        queries: security-extended,security-and-quality
+
+    - name: Set up Go environment
+      uses: ./.github/actions/setup-go
+      with:
+        go-version: ${{ inputs.go-version }}
+
+    - name: Build for CodeQL analysis
+      run: |
+        go build ./...
+
+    - name: Perform CodeQL Analysis
+      id: analyze
+      uses: github/codeql-action/analyze@v2
+      with:
+        category: "/language:go"
+
+    - name: Set analysis result
+      run: |
+        echo "result=success" >> $GITHUB_OUTPUT
+
+  # Dependency review
+  dependency-review:
+    name: Dependency Review
+    runs-on: ubuntu-latest
+    if: inputs.run-dependency-review
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Dependency Review
+      uses: actions/dependency-review-action@v3
+      with:
+        fail-on-severity: moderate
+        allow-licenses: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC
+        deny-licenses: GPL-2.0, GPL-3.0
+
+  # Container security scanning
+  container-security:
+    name: Container Security Scan
+    runs-on: ubuntu-latest
+    if: inputs.run-container-scan && inputs.image-name
+    
+    outputs:
+      trivy-result: ${{ steps.trivy.outputs.result }}
+    
+    steps:
+    - name: Run Trivy vulnerability scanner
+      id: trivy
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ inputs.registry }}/${{ inputs.image-name }}:latest
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        severity: 'CRITICAL,HIGH,MEDIUM'
+      continue-on-error: true
+
+    - name: Set Trivy result
+      run: |
+        if [ -f trivy-results.sarif ]; then
+          # Check if any vulnerabilities were found
+          VULN_COUNT=$(jq '.runs[0].results | length' trivy-results.sarif 2>/dev/null || echo "0")
+          if [ "$VULN_COUNT" -gt 0 ]; then
+            echo "⚠️ Trivy found $VULN_COUNT vulnerabilities"
+            echo "result=warning" >> $GITHUB_OUTPUT
+          else
+            echo "✅ No vulnerabilities found by Trivy"
+            echo "result=success" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "❌ Trivy scan failed"
+          echo "result=failure" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: 'trivy-results.sarif'
+        category: trivy
+      if: always()
+
+    - name: Upload Trivy results as artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: trivy-results
+        path: trivy-results.sarif
+        retention-days: 30
+      if: always()
+
+  # Security summary
+  security-summary:
+    name: Security Summary
+    runs-on: ubuntu-latest
+    needs: [code-security, codeql, dependency-review, container-security]
+    if: always()
+    
+    steps:
+    - name: Generate security summary
+      run: |
+        echo "## Security Scan Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Scan Type | Status | Details |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----------|--------|---------|" >> $GITHUB_STEP_SUMMARY
+        
+        # Gosec results
+        GOSEC_STATUS="${{ needs.code-security.outputs.gosec-result }}"
+        case "$GOSEC_STATUS" in
+          "success") echo "| Gosec (Code Security) | ✅ Passed | No security issues found |" >> $GITHUB_STEP_SUMMARY ;;
+          "warning") echo "| Gosec (Code Security) | ⚠️ Warning | Security issues detected |" >> $GITHUB_STEP_SUMMARY ;;
+          "failure") echo "| Gosec (Code Security) | ❌ Failed | Scan failed to complete |" >> $GITHUB_STEP_SUMMARY ;;
+          *) echo "| Gosec (Code Security) | ⏭️ Skipped | Not executed |" >> $GITHUB_STEP_SUMMARY ;;
+        esac
+        
+        # CodeQL results
+        if [[ "${{ inputs.run-codeql }}" == "true" ]]; then
+          CODEQL_STATUS="${{ needs.codeql.outputs.result }}"
+          case "$CODEQL_STATUS" in
+            "success") echo "| CodeQL Analysis | ✅ Passed | No issues found |" >> $GITHUB_STEP_SUMMARY ;;
+            "failure") echo "| CodeQL Analysis | ❌ Failed | Analysis failed |" >> $GITHUB_STEP_SUMMARY ;;
+            *) echo "| CodeQL Analysis | ⚠️ Warning | Check results for details |" >> $GITHUB_STEP_SUMMARY ;;
+          esac
+        else
+          echo "| CodeQL Analysis | ⏭️ Skipped | Not enabled for this run |" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Dependency Review results
+        if [[ "${{ inputs.run-dependency-review }}" == "true" ]]; then
+          DEP_STATUS="${{ needs.dependency-review.result }}"
+          case "$DEP_STATUS" in
+            "success") echo "| Dependency Review | ✅ Passed | No vulnerable dependencies |" >> $GITHUB_STEP_SUMMARY ;;
+            "failure") echo "| Dependency Review | ❌ Failed | Vulnerable dependencies found |" >> $GITHUB_STEP_SUMMARY ;;
+            *) echo "| Dependency Review | ⚠️ Warning | Check results for details |" >> $GITHUB_STEP_SUMMARY ;;
+          esac
+        else
+          echo "| Dependency Review | ⏭️ Skipped | Not enabled for this run |" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Container Security results
+        if [[ "${{ inputs.run-container-scan }}" == "true" && "${{ inputs.image-name }}" != "" ]]; then
+          TRIVY_STATUS="${{ needs.container-security.outputs.trivy-result }}"
+          case "$TRIVY_STATUS" in
+            "success") echo "| Container Scan (Trivy) | ✅ Passed | No vulnerabilities found |" >> $GITHUB_STEP_SUMMARY ;;
+            "warning") echo "| Container Scan (Trivy) | ⚠️ Warning | Vulnerabilities detected |" >> $GITHUB_STEP_SUMMARY ;;
+            "failure") echo "| Container Scan (Trivy) | ❌ Failed | Scan failed to complete |" >> $GITHUB_STEP_SUMMARY ;;
+            *) echo "| Container Scan (Trivy) | ⏭️ Skipped | Not executed |" >> $GITHUB_STEP_SUMMARY ;;
+          esac
+        else
+          echo "| Container Scan (Trivy) | ⏭️ Skipped | Container scanning disabled |" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Recommendations" >> $GITHUB_STEP_SUMMARY
+        echo "- Review SARIF files uploaded to Security tab for detailed findings" >> $GITHUB_STEP_SUMMARY
+        echo "- Address any HIGH or CRITICAL severity issues promptly" >> $GITHUB_STEP_SUMMARY
+        echo "- Keep dependencies updated to latest secure versions" >> $GITHUB_STEP_SUMMARY
+        echo "- Monitor security advisories for used dependencies" >> $GITHUB_STEP_SUMMARY

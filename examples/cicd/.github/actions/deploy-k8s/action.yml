@@ -1,0 +1,383 @@
+name: 'Deploy to Kubernetes'
+description: 'Deploy application to Kubernetes cluster with configurable strategies'
+
+inputs:
+  namespace:
+    description: 'Kubernetes namespace for deployment'
+    required: true
+  image:
+    description: 'Container image to deploy'
+    required: true
+  replicas:
+    description: 'Number of replicas to deploy'
+    required: false
+    default: '1'
+  resources:
+    description: 'Resource requests and limits as JSON'
+    required: false
+    default: '{"requests":{"cpu":"100m","memory":"128Mi"},"limits":{"cpu":"500m","memory":"512Mi"}}'
+  strategy:
+    description: 'Deployment strategy (rolling, blue-green, canary)'
+    required: false
+    default: 'rolling'
+  kubeconfig-path:
+    description: 'Path to kubeconfig file'
+    required: true
+
+outputs:
+  deployment-name:
+    description: 'Name of the created deployment'
+    value: ${{ steps.deploy.outputs.deployment-name }}
+  service-name:
+    description: 'Name of the created service'
+    value: ${{ steps.deploy.outputs.service-name }}
+
+runs:
+  using: 'composite'
+  steps:
+  - name: Validate inputs
+    shell: bash
+    run: |
+      echo "Validating deployment inputs..."
+      
+      # Validate namespace
+      if [[ ! "${{ inputs.namespace }}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
+        echo "ERROR: Invalid namespace format: ${{ inputs.namespace }}"
+        exit 1
+      fi
+      
+      # Validate image
+      if [ -z "${{ inputs.image }}" ]; then
+        echo "ERROR: Image cannot be empty"
+        exit 1
+      fi
+      
+      # Validate replicas
+      if ! [[ "${{ inputs.replicas }}" =~ ^[0-9]+$ ]] || [ "${{ inputs.replicas }}" -lt 1 ]; then
+        echo "ERROR: Replicas must be a positive integer"
+        exit 1
+      fi
+      
+      # Validate strategy
+      case "${{ inputs.strategy }}" in
+        rolling|blue-green|canary)
+          echo "✅ Valid deployment strategy: ${{ inputs.strategy }}"
+          ;;
+        *)
+          echo "ERROR: Invalid deployment strategy: ${{ inputs.strategy }}"
+          echo "Supported strategies: rolling, blue-green, canary"
+          exit 1
+          ;;
+      esac
+      
+      echo "✅ All inputs validated successfully"
+
+  - name: Setup kubectl
+    shell: bash
+    run: |
+      export KUBECONFIG="${{ inputs.kubeconfig-path }}"
+      
+      # Test kubectl connectivity
+      echo "Testing kubectl connectivity..."
+      kubectl version --client
+      kubectl cluster-info
+      
+      # Verify namespace exists or create it
+      if ! kubectl get namespace "${{ inputs.namespace }}" >/dev/null 2>&1; then
+        echo "Creating namespace: ${{ inputs.namespace }}"
+        kubectl create namespace "${{ inputs.namespace }}"
+      else
+        echo "✅ Namespace exists: ${{ inputs.namespace }}"
+      fi
+
+  - name: Prepare deployment manifests
+    shell: bash
+    run: |
+      echo "Preparing Kubernetes manifests..."
+      
+      # Create deployment manifest
+      cat > deployment.yaml << EOF
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: rwwwrse
+        namespace: ${{ inputs.namespace }}
+        labels:
+          app: rwwwrse
+          version: ${{ github.sha }}
+          environment: ${{ inputs.namespace }}
+      spec:
+        replicas: ${{ inputs.replicas }}
+        strategy:
+          type: RollingUpdate
+          rollingUpdate:
+            maxUnavailable: 1
+            maxSurge: 1
+        selector:
+          matchLabels:
+            app: rwwwrse
+        template:
+          metadata:
+            labels:
+              app: rwwwrse
+              version: ${{ github.sha }}
+          spec:
+            containers:
+            - name: rwwwrse
+              image: ${{ inputs.image }}
+              ports:
+              - containerPort: 8080
+                name: http
+              - containerPort: 9090
+                name: metrics
+              env:
+              - name: LOG_LEVEL
+                value: "info"
+              - name: ENVIRONMENT
+                value: "${{ inputs.namespace }}"
+              - name: VERSION
+                value: "${{ github.sha }}"
+              resources: ${{ inputs.resources }}
+              livenessProbe:
+                httpGet:
+                  path: /health
+                  port: 8080
+                initialDelaySeconds: 30
+                periodSeconds: 10
+                timeoutSeconds: 5
+                failureThreshold: 3
+              readinessProbe:
+                httpGet:
+                  path: /health
+                  port: 8080
+                initialDelaySeconds: 5
+                periodSeconds: 5
+                timeoutSeconds: 3
+                failureThreshold: 3
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 65534
+                readOnlyRootFilesystem: true
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                  - ALL
+      EOF
+      
+      # Create service manifest
+      cat > service.yaml << EOF
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: rwwwrse
+        namespace: ${{ inputs.namespace }}
+        labels:
+          app: rwwwrse
+      spec:
+        selector:
+          app: rwwwrse
+        ports:
+        - name: http
+          port: 80
+          targetPort: 8080
+          protocol: TCP
+        - name: metrics
+          port: 9090
+          targetPort: 9090
+          protocol: TCP
+        type: ClusterIP
+      EOF
+      
+      # Create configmap if it doesn't exist
+      cat > configmap.yaml << EOF
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: rwwwrse-config
+        namespace: ${{ inputs.namespace }}
+      data:
+        config.yaml: |
+          server:
+            port: 8080
+            metrics_port: 9090
+          logging:
+            level: info
+            format: json
+          health:
+            enabled: true
+            path: /health
+      EOF
+      
+      echo "✅ Manifests prepared successfully"
+
+  - name: Deploy with rolling strategy
+    if: inputs.strategy == 'rolling'
+    shell: bash
+    id: deploy-rolling
+    run: |
+      export KUBECONFIG="${{ inputs.kubeconfig-path }}"
+      
+      echo "Deploying with rolling update strategy..."
+      
+      # Apply manifests
+      kubectl apply -f configmap.yaml
+      kubectl apply -f service.yaml
+      kubectl apply -f deployment.yaml
+      
+      # Wait for rollout to complete
+      echo "Waiting for deployment rollout..."
+      kubectl rollout status deployment/rwwwrse -n "${{ inputs.namespace }}" --timeout=600s
+      
+      echo "deployment-name=rwwwrse" >> $GITHUB_OUTPUT
+      echo "service-name=rwwwrse" >> $GITHUB_OUTPUT
+      
+      echo "✅ Rolling deployment completed successfully"
+
+  - name: Deploy with blue-green strategy
+    if: inputs.strategy == 'blue-green'
+    shell: bash
+    id: deploy-blue-green
+    run: |
+      export KUBECONFIG="${{ inputs.kubeconfig-path }}"
+      
+      echo "Deploying with blue-green strategy..."
+      
+      # Determine current and new colors
+      CURRENT_COLOR=$(kubectl get service rwwwrse -n "${{ inputs.namespace }}" -o jsonpath='{.spec.selector.color}' 2>/dev/null || echo "")
+      
+      if [ "$CURRENT_COLOR" = "blue" ]; then
+        NEW_COLOR="green"
+      else
+        NEW_COLOR="blue"
+      fi
+      
+      echo "Current color: ${CURRENT_COLOR:-none}"
+      echo "Deploying to: $NEW_COLOR"
+      
+      # Update deployment manifest with color
+      sed -i "s/name: rwwwrse/name: rwwwrse-$NEW_COLOR/g" deployment.yaml
+      sed -i "/app: rwwwrse/a\\      color: $NEW_COLOR" deployment.yaml
+      
+      # Apply new deployment
+      kubectl apply -f configmap.yaml
+      kubectl apply -f deployment.yaml
+      
+      # Wait for new deployment
+      kubectl rollout status deployment/rwwwrse-$NEW_COLOR -n "${{ inputs.namespace }}" --timeout=600s
+      
+      # Test new deployment internally
+      echo "Testing new deployment..."
+      kubectl run test-pod --image=curlimages/curl:latest --rm -i --restart=Never -n "${{ inputs.namespace }}" -- \
+        curl -f http://rwwwrse-$NEW_COLOR:80/health
+      
+      # Switch traffic to new deployment
+      echo "Switching traffic to $NEW_COLOR deployment..."
+      kubectl patch service rwwwrse -n "${{ inputs.namespace }}" -p '{"spec":{"selector":{"color":"'$NEW_COLOR'"}}}'
+      
+      # Clean up old deployment after successful switch
+      if [ -n "$CURRENT_COLOR" ]; then
+        echo "Cleaning up old $CURRENT_COLOR deployment..."
+        kubectl delete deployment rwwwrse-$CURRENT_COLOR -n "${{ inputs.namespace }}" --ignore-not-found=true
+      fi
+      
+      echo "deployment-name=rwwwrse-$NEW_COLOR" >> $GITHUB_OUTPUT
+      echo "service-name=rwwwrse" >> $GITHUB_OUTPUT
+      
+      echo "✅ Blue-green deployment completed successfully"
+
+  - name: Deploy with canary strategy
+    if: inputs.strategy == 'canary'
+    shell: bash
+    id: deploy-canary
+    run: |
+      export KUBECONFIG="${{ inputs.kubeconfig-path }}"
+      
+      echo "Deploying with canary strategy..."
+      
+      # Calculate canary replicas (20% of total)
+      TOTAL_REPLICAS=${{ inputs.replicas }}
+      CANARY_REPLICAS=$(( (TOTAL_REPLICAS * 20 + 99) / 100 ))  # Round up
+      STABLE_REPLICAS=$((TOTAL_REPLICAS - CANARY_REPLICAS))
+      
+      echo "Total replicas: $TOTAL_REPLICAS"
+      echo "Canary replicas: $CANARY_REPLICAS"
+      echo "Stable replicas: $STABLE_REPLICAS"
+      
+      # Deploy canary version
+      sed -i "s/name: rwwwrse/name: rwwwrse-canary/g" deployment.yaml
+      sed -i "s/replicas: ${{ inputs.replicas }}/replicas: $CANARY_REPLICAS/g" deployment.yaml
+      sed -i "/app: rwwwrse/a\\      version: canary" deployment.yaml
+      
+      kubectl apply -f configmap.yaml
+      kubectl apply -f deployment.yaml
+      
+      # Wait for canary deployment
+      kubectl rollout status deployment/rwwwrse-canary -n "${{ inputs.namespace }}" --timeout=300s
+      
+      # Update service to include both stable and canary
+      cat > service-canary.yaml << EOF
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: rwwwrse
+        namespace: ${{ inputs.namespace }}
+        labels:
+          app: rwwwrse
+      spec:
+        selector:
+          app: rwwwrse
+        ports:
+        - name: http
+          port: 80
+          targetPort: 8080
+          protocol: TCP
+        - name: metrics
+          port: 9090
+          targetPort: 9090
+          protocol: TCP
+        type: ClusterIP
+      EOF
+      
+      kubectl apply -f service-canary.yaml
+      
+      echo "deployment-name=rwwwrse-canary" >> $GITHUB_OUTPUT
+      echo "service-name=rwwwrse" >> $GITHUB_OUTPUT
+      
+      echo "✅ Canary deployment completed successfully"
+      echo "⚠️ Remember to promote or rollback the canary deployment"
+
+  - name: Set deployment outputs
+    shell: bash
+    id: deploy
+    run: |
+      # Set outputs based on strategy
+      case "${{ inputs.strategy }}" in
+        rolling)
+          echo "deployment-name=rwwwrse" >> $GITHUB_OUTPUT
+          ;;
+        blue-green)
+          echo "deployment-name=${{ steps.deploy-blue-green.outputs.deployment-name }}" >> $GITHUB_OUTPUT
+          ;;
+        canary)
+          echo "deployment-name=${{ steps.deploy-canary.outputs.deployment-name }}" >> $GITHUB_OUTPUT
+          ;;
+      esac
+      echo "service-name=rwwwrse" >> $GITHUB_OUTPUT
+
+  - name: Verify deployment
+    shell: bash
+    run: |
+      export KUBECONFIG="${{ inputs.kubeconfig-path }}"
+      
+      echo "Verifying deployment..."
+      
+      # Check pod status
+      kubectl get pods -n "${{ inputs.namespace }}" -l app=rwwwrse
+      
+      # Check service
+      kubectl get service rwwwrse -n "${{ inputs.namespace }}"
+      
+      # Verify all pods are ready
+      kubectl wait --for=condition=ready pod -l app=rwwwrse -n "${{ inputs.namespace }}" --timeout=300s
+      
+      echo "✅ Deployment verification completed successfully"

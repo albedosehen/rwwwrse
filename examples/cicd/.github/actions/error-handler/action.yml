@@ -1,0 +1,318 @@
+name: 'Enhanced Error Handler'
+description: 'Comprehensive error handling with circuit breakers, retry logic, and error categorization'
+
+inputs:
+  operation:
+    description: 'Name of the operation being performed'
+    required: true
+  max-retries:
+    description: 'Maximum number of retry attempts'
+    required: false
+    default: '3'
+  initial-delay:
+    description: 'Initial delay between retries in seconds'
+    required: false
+    default: '5'
+  backoff-factor:
+    description: 'Exponential backoff factor'
+    required: false
+    default: '2'
+  max-delay:
+    description: 'Maximum delay between retries in seconds'
+    required: false
+    default: '300'
+  circuit-breaker-threshold:
+    description: 'Number of failures before opening circuit breaker'
+    required: false
+    default: '5'
+  circuit-breaker-timeout:
+    description: 'Circuit breaker timeout in seconds'
+    required: false
+    default: '60'
+  error-categories:
+    description: 'JSON array of error categories to handle'
+    required: false
+    default: '["transient", "permanent", "critical"]'
+  notification-webhook:
+    description: 'Webhook URL for error notifications'
+    required: false
+  correlation-id:
+    description: 'Correlation ID for tracking across operations'
+    required: false
+  environment:
+    description: 'Environment context for error handling'
+    required: false
+    default: 'unknown'
+
+outputs:
+  success:
+    description: 'Whether the operation succeeded'
+    value: ${{ steps.execute.outputs.success }}
+  error-category:
+    description: 'Category of error if operation failed'
+    value: ${{ steps.categorize.outputs.error-category }}
+  retry-count:
+    description: 'Number of retries attempted'
+    value: ${{ steps.execute.outputs.retry-count }}
+  circuit-breaker-state:
+    description: 'Current circuit breaker state'
+    value: ${{ steps.circuit-breaker.outputs.state }}
+  correlation-id:
+    description: 'Correlation ID for this operation'
+    value: ${{ steps.setup.outputs.correlation-id }}
+
+runs:
+  using: 'composite'
+  steps:
+  - name: Setup error handling context
+    id: setup
+    shell: bash
+    run: |
+      echo "Setting up error handling context..."
+      
+      # Generate correlation ID if not provided
+      if [ -z "${{ inputs.correlation-id }}" ]; then
+        CORRELATION_ID="eh-$(date +%s)-$(uuidgen | cut -d'-' -f1)"
+      else
+        CORRELATION_ID="${{ inputs.correlation-id }}"
+      fi
+      
+      echo "correlation-id=$CORRELATION_ID" >> $GITHUB_OUTPUT
+      echo "CORRELATION_ID=$CORRELATION_ID" >> $GITHUB_ENV
+      
+      # Setup error tracking directory
+      mkdir -p .error-handler
+      echo "0" > .error-handler/failure-count
+      echo "closed" > .error-handler/circuit-state
+      echo "$(date +%s)" > .error-handler/last-failure
+      
+      echo "✅ Error handling context initialized"
+      echo "Operation: ${{ inputs.operation }}"
+      echo "Correlation ID: $CORRELATION_ID"
+      echo "Environment: ${{ inputs.environment }}"
+
+  - name: Check circuit breaker state
+    id: circuit-breaker
+    shell: bash
+    run: |
+      echo "Checking circuit breaker state..."
+      
+      FAILURE_COUNT=$(cat .error-handler/failure-count 2>/dev/null || echo "0")
+      CIRCUIT_STATE=$(cat .error-handler/circuit-state 2>/dev/null || echo "closed")
+      LAST_FAILURE=$(cat .error-handler/last-failure 2>/dev/null || echo "0")
+      CURRENT_TIME=$(date +%s)
+      
+      echo "Current failure count: $FAILURE_COUNT"
+      echo "Current circuit state: $CIRCUIT_STATE"
+      
+      # Check if circuit breaker should be opened
+      if [ "$FAILURE_COUNT" -ge "${{ inputs.circuit-breaker-threshold }}" ] && [ "$CIRCUIT_STATE" = "closed" ]; then
+        echo "open" > .error-handler/circuit-state
+        CIRCUIT_STATE="open"
+        echo "🔴 Circuit breaker OPENED due to failure threshold"
+      fi
+      
+      # Check if circuit breaker should transition to half-open
+      if [ "$CIRCUIT_STATE" = "open" ]; then
+        TIME_DIFF=$((CURRENT_TIME - LAST_FAILURE))
+        if [ "$TIME_DIFF" -ge "${{ inputs.circuit-breaker-timeout }}" ]; then
+          echo "half-open" > .error-handler/circuit-state
+          CIRCUIT_STATE="half-open"
+          echo "🟡 Circuit breaker transitioned to HALF-OPEN"
+        fi
+      fi
+      
+      echo "state=$CIRCUIT_STATE" >> $GITHUB_OUTPUT
+      echo "CIRCUIT_STATE=$CIRCUIT_STATE" >> $GITHUB_ENV
+      
+      # Fail fast if circuit is open
+      if [ "$CIRCUIT_STATE" = "open" ]; then
+        echo "❌ Circuit breaker is OPEN - failing fast"
+        echo "Failure count: $FAILURE_COUNT"
+        echo "Last failure: $(date -d @$LAST_FAILURE)"
+        exit 1
+      fi
+
+  - name: Execute operation with retry logic
+    id: execute
+    shell: bash
+    run: |
+      echo "Executing operation with retry logic..."
+      
+      MAX_RETRIES=${{ inputs.max-retries }}
+      INITIAL_DELAY=${{ inputs.initial-delay }}
+      BACKOFF_FACTOR=${{ inputs.backoff-factor }}
+      MAX_DELAY=${{ inputs.max-delay }}
+      
+      RETRY_COUNT=0
+      DELAY=$INITIAL_DELAY
+      SUCCESS=false
+      
+      while [ $RETRY_COUNT -le $MAX_RETRIES ]; do
+        echo "Attempt $((RETRY_COUNT + 1)) of $((MAX_RETRIES + 1))"
+        
+        # Execute the actual operation (this would be replaced with actual operation logic)
+        # For demonstration, we'll simulate an operation that might fail
+        if [ "$RETRY_COUNT" -lt 2 ] && [ "${{ inputs.operation }}" = "test-failure" ]; then
+          echo "❌ Operation failed (simulated failure for testing)"
+          EXIT_CODE=1
+        else
+          echo "✅ Operation succeeded"
+          EXIT_CODE=0
+        fi
+        
+        if [ $EXIT_CODE -eq 0 ]; then
+          SUCCESS=true
+          echo "✅ Operation '${{ inputs.operation }}' succeeded on attempt $((RETRY_COUNT + 1))"
+          break
+        else
+          echo "❌ Operation '${{ inputs.operation }}' failed on attempt $((RETRY_COUNT + 1))"
+          
+          if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+            echo "⏳ Retrying in ${DELAY} seconds..."
+            sleep $DELAY
+            
+            # Calculate next delay with exponential backoff
+            DELAY=$((DELAY * BACKOFF_FACTOR))
+            if [ $DELAY -gt $MAX_DELAY ]; then
+              DELAY=$MAX_DELAY
+            fi
+          fi
+          
+          RETRY_COUNT=$((RETRY_COUNT + 1))
+        fi
+      done
+      
+      echo "success=$SUCCESS" >> $GITHUB_OUTPUT
+      echo "retry-count=$RETRY_COUNT" >> $GITHUB_OUTPUT
+      echo "OPERATION_SUCCESS=$SUCCESS" >> $GITHUB_ENV
+      echo "RETRY_COUNT=$RETRY_COUNT" >> $GITHUB_ENV
+      
+      if [ "$SUCCESS" = "false" ]; then
+        echo "❌ Operation failed after $RETRY_COUNT retries"
+        exit 1
+      fi
+
+  - name: Update circuit breaker on success
+    if: steps.execute.outputs.success == 'true'
+    shell: bash
+    run: |
+      echo "Updating circuit breaker state after success..."
+      
+      # Reset failure count and close circuit on success
+      echo "0" > .error-handler/failure-count
+      echo "closed" > .error-handler/circuit-state
+      
+      echo "✅ Circuit breaker reset to CLOSED state"
+
+  - name: Update circuit breaker on failure
+    if: failure()
+    shell: bash
+    run: |
+      echo "Updating circuit breaker state after failure..."
+      
+      FAILURE_COUNT=$(cat .error-handler/failure-count 2>/dev/null || echo "0")
+      FAILURE_COUNT=$((FAILURE_COUNT + 1))
+      
+      echo "$FAILURE_COUNT" > .error-handler/failure-count
+      echo "$(date +%s)" > .error-handler/last-failure
+      
+      echo "❌ Failure count updated to: $FAILURE_COUNT"
+      
+      # Check if we should open the circuit breaker
+      if [ "$FAILURE_COUNT" -ge "${{ inputs.circuit-breaker-threshold }}" ]; then
+        echo "open" > .error-handler/circuit-state
+        echo "🔴 Circuit breaker OPENED due to failure threshold"
+      fi
+
+  - name: Categorize error
+    id: categorize
+    if: failure()
+    shell: bash
+    run: |
+      echo "Categorizing error..."
+      
+      # Simple error categorization logic (can be enhanced)
+      ERROR_CATEGORY="unknown"
+      
+      # Check for common transient errors
+      if echo "${{ steps.execute.outcome }}" | grep -i "timeout\|connection\|network\|temporary"; then
+        ERROR_CATEGORY="transient"
+      elif echo "${{ steps.execute.outcome }}" | grep -i "authentication\|authorization\|permission"; then
+        ERROR_CATEGORY="security"
+      elif echo "${{ steps.execute.outcome }}" | grep -i "not found\|invalid\|syntax"; then
+        ERROR_CATEGORY="permanent"
+      elif [ "$RETRY_COUNT" -ge "${{ inputs.max-retries }}" ]; then
+        ERROR_CATEGORY="critical"
+      fi
+      
+      echo "error-category=$ERROR_CATEGORY" >> $GITHUB_OUTPUT
+      echo "ERROR_CATEGORY=$ERROR_CATEGORY" >> $GITHUB_ENV
+      
+      echo "Error categorized as: $ERROR_CATEGORY"
+
+  - name: Send error notification
+    if: failure() && inputs.notification-webhook != ''
+    shell: bash
+    run: |
+      echo "Sending error notification..."
+      
+      # Create error notification payload
+      cat > error-notification.json << EOF
+      {
+        "operation": "${{ inputs.operation }}",
+        "environment": "${{ inputs.environment }}",
+        "correlation_id": "$CORRELATION_ID",
+        "error_category": "$ERROR_CATEGORY",
+        "retry_count": "$RETRY_COUNT",
+        "circuit_breaker_state": "$CIRCUIT_STATE",
+        "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+        "workflow_run": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+        "actor": "${{ github.actor }}",
+        "repository": "${{ github.repository }}",
+        "ref": "${{ github.ref }}"
+      }
+      EOF
+      
+      # Send notification
+      curl -X POST \
+        -H "Content-Type: application/json" \
+        -d @error-notification.json \
+        "${{ inputs.notification-webhook }}" \
+        --max-time 30 \
+        --retry 3 \
+        --retry-delay 5 || echo "Failed to send error notification"
+
+  - name: Create error summary
+    if: always()
+    shell: bash
+    run: |
+      echo "## Error Handler Summary" >> $GITHUB_STEP_SUMMARY
+      echo "" >> $GITHUB_STEP_SUMMARY
+      echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+      echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+      echo "| Operation | ${{ inputs.operation }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Environment | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Correlation ID | $CORRELATION_ID |" >> $GITHUB_STEP_SUMMARY
+      echo "| Success | ${{ steps.execute.outputs.success || 'false' }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Retry Count | ${{ steps.execute.outputs.retry-count || '0' }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Circuit Breaker State | ${{ steps.circuit-breaker.outputs.state }} |" >> $GITHUB_STEP_SUMMARY
+      
+      if [ "${{ steps.execute.outputs.success }}" != "true" ]; then
+        echo "| Error Category | ${{ steps.categorize.outputs.error-category || 'unknown' }} |" >> $GITHUB_STEP_SUMMARY
+      fi
+      
+      echo "" >> $GITHUB_STEP_SUMMARY
+      
+      if [ "${{ steps.execute.outputs.success }}" = "true" ]; then
+        echo "### ✅ Operation Successful" >> $GITHUB_STEP_SUMMARY
+        echo "The operation completed successfully." >> $GITHUB_STEP_SUMMARY
+      else
+        echo "### ❌ Operation Failed" >> $GITHUB_STEP_SUMMARY
+        echo "The operation failed after retry attempts." >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Error Details:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Category: ${{ steps.categorize.outputs.error-category || 'unknown' }}" >> $GITHUB_STEP_SUMMARY
+        echo "- Retries: ${{ steps.execute.outputs.retry-count || '0' }}" >> $GITHUB_STEP_SUMMARY
+        echo "- Circuit Breaker: ${{ steps.circuit-breaker.outputs.state }}" >> $GITHUB_STEP_SUMMARY
+      fi

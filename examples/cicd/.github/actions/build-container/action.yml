@@ -1,0 +1,257 @@
+name: 'Build Container Image'
+description: 'Build and optionally push container images with multi-platform support'
+
+inputs:
+  registry:
+    description: 'Container registry URL'
+    required: false
+    default: 'ghcr.io'
+  image-name:
+    description: 'Container image name'
+    required: true
+  platforms:
+    description: 'Target platforms for multi-arch build'
+    required: false
+    default: 'linux/amd64,linux/arm64'
+  tags:
+    description: 'Container image tags (newline separated)'
+    required: true
+  labels:
+    description: 'Container image labels (newline separated)'
+    required: false
+    default: ''
+  context:
+    description: 'Build context path'
+    required: false
+    default: '.'
+  dockerfile:
+    description: 'Path to Dockerfile'
+    required: false
+    default: 'Dockerfile'
+  version:
+    description: 'Version to embed in image'
+    required: false
+    default: 'dev'
+  commit:
+    description: 'Commit hash to embed in image'
+    required: false
+    default: 'unknown'
+  push:
+    description: 'Whether to push the image'
+    required: false
+    default: 'false'
+  cache-from:
+    description: 'Cache source'
+    required: false
+    default: 'type=gha'
+  cache-to:
+    description: 'Cache destination'
+    required: false
+    default: 'type=gha,mode=max'
+  build-args:
+    description: 'Build arguments (newline separated)'
+    required: false
+    default: ''
+
+outputs:
+  image:
+    description: 'Built image reference with digest'
+    value: ${{ steps.build.outputs.imageid }}
+  digest:
+    description: 'Image digest'
+    value: ${{ steps.build.outputs.digest }}
+  metadata:
+    description: 'Build result metadata'
+    value: ${{ steps.build.outputs.metadata }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate inputs
+      shell: bash
+      run: |
+        echo "Validating container build inputs..."
+        
+        # Check if Dockerfile exists
+        if [ ! -f "${{ inputs.context }}/${{ inputs.dockerfile }}" ]; then
+          echo "❌ Dockerfile not found: ${{ inputs.context }}/${{ inputs.dockerfile }}"
+          exit 1
+        fi
+        
+        # Validate registry format
+        if [[ ! "${{ inputs.registry }}" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+          echo "❌ Invalid registry format: ${{ inputs.registry }}"
+          exit 1
+        fi
+        
+        # Validate image name
+        if [[ ! "${{ inputs.image-name }}" =~ ^[a-z0-9._/-]+$ ]]; then
+          echo "❌ Invalid image name format: ${{ inputs.image-name }}"
+          exit 1
+        fi
+        
+        echo "✅ All inputs validated successfully"
+        echo "- Registry: ${{ inputs.registry }}"
+        echo "- Image: ${{ inputs.image-name }}"
+        echo "- Platforms: ${{ inputs.platforms }}"
+        echo "- Context: ${{ inputs.context }}"
+        echo "- Dockerfile: ${{ inputs.dockerfile }}"
+        echo "- Push: ${{ inputs.push }}"
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      with:
+        platforms: ${{ inputs.platforms }}
+
+    - name: Prepare build arguments
+      id: build-args
+      shell: bash
+      run: |
+        echo "Preparing build arguments..."
+        
+        # Base build args
+        BUILD_ARGS="VERSION=${{ inputs.version }}"
+        BUILD_ARGS="${BUILD_ARGS}\nCOMMIT=${{ inputs.commit }}"
+        BUILD_ARGS="${BUILD_ARGS}\nBUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        
+        # Add custom build args if provided
+        if [ -n "${{ inputs.build-args }}" ]; then
+          BUILD_ARGS="${BUILD_ARGS}\n${{ inputs.build-args }}"
+        fi
+        
+        # Save to file for docker build
+        echo -e "${BUILD_ARGS}" > /tmp/build-args.txt
+        
+        echo "Build arguments prepared:"
+        cat /tmp/build-args.txt
+        
+        # Convert to build-arg format for docker build
+        BUILD_ARG_FLAGS=""
+        while IFS= read -r line; do
+          if [ -n "$line" ]; then
+            BUILD_ARG_FLAGS="${BUILD_ARG_FLAGS} --build-arg ${line}"
+          fi
+        done < /tmp/build-args.txt
+        
+        echo "build-arg-flags=${BUILD_ARG_FLAGS}" >> $GITHUB_OUTPUT
+
+    - name: Build and push Docker image
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.context }}/${{ inputs.dockerfile }}
+        platforms: ${{ inputs.platforms }}
+        push: ${{ inputs.push }}
+        tags: ${{ inputs.tags }}
+        labels: ${{ inputs.labels }}
+        cache-from: ${{ inputs.cache-from }}
+        cache-to: ${{ inputs.cache-to }}
+        build-args: |
+          VERSION=${{ inputs.version }}
+          COMMIT=${{ inputs.commit }}
+          BUILD_TIME=${{ steps.build-args.outputs.build-time }}
+          ${{ inputs.build-args }}
+
+    - name: Inspect image
+      if: inputs.push == 'true'
+      shell: bash
+      run: |
+        echo "Inspecting built image..."
+        
+        # Get the first tag for inspection
+        FIRST_TAG=$(echo "${{ inputs.tags }}" | head -n1)
+        
+        if [ -n "$FIRST_TAG" ]; then
+          echo "Inspecting image: $FIRST_TAG"
+          
+          # Try to inspect the image
+          if docker buildx imagetools inspect "$FIRST_TAG" > /tmp/image-inspect.json 2>/dev/null; then
+            echo "✅ Image inspection successful"
+            
+            # Extract useful information
+            echo "Image details:"
+            echo "- Digest: ${{ steps.build.outputs.digest }}"
+            echo "- Platforms: $(jq -r '.manifest.mediaType // "unknown"' /tmp/image-inspect.json 2>/dev/null || echo "unknown")"
+            
+            # Show manifest info if available
+            if command -v jq >/dev/null 2>&1; then
+              echo "Manifest information:"
+              jq -r '.manifest // {}' /tmp/image-inspect.json 2>/dev/null || echo "No manifest data available"
+            fi
+          else
+            echo "⚠️ Could not inspect image (this may be normal for some registries)"
+          fi
+        else
+          echo "⚠️ No tags available for inspection"
+        fi
+
+    - name: Security scan with Trivy
+      if: inputs.push == 'true'
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ steps.build.outputs.imageid }}
+        format: 'table'
+        exit-code: '0'
+        severity: 'CRITICAL,HIGH'
+      continue-on-error: true
+
+    - name: Generate build summary
+      shell: bash
+      run: |
+        echo "## Container Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+        echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Registry | ${{ inputs.registry }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Image Name | ${{ inputs.image-name }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Platforms | ${{ inputs.platforms }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Pushed | ${{ inputs.push }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Digest | ${{ steps.build.outputs.digest }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Version | ${{ inputs.version }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Commit | ${{ inputs.commit }} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        echo "### Image Tags" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        echo "${{ inputs.tags }}" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        
+        if [ -n "${{ inputs.labels }}" ]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Image Labels" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "${{ inputs.labels }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Build Configuration" >> $GITHUB_STEP_SUMMARY
+        echo "- **Context**: ${{ inputs.context }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Dockerfile**: ${{ inputs.dockerfile }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Cache From**: ${{ inputs.cache-from }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Cache To**: ${{ inputs.cache-to }}" >> $GITHUB_STEP_SUMMARY
+
+    - name: Output build information
+      shell: bash
+      run: |
+        echo "Container build completed successfully!"
+        echo ""
+        echo "Build outputs:"
+        echo "- Image ID: ${{ steps.build.outputs.imageid }}"
+        echo "- Digest: ${{ steps.build.outputs.digest }}"
+        echo "- Metadata: ${{ steps.build.outputs.metadata }}"
+        echo ""
+        
+        if [ "${{ inputs.push }}" = "true" ]; then
+          echo "Image pushed to registry: ${{ inputs.registry }}"
+          echo ""
+          echo "Available tags:"
+          echo "${{ inputs.tags }}" | while IFS= read -r tag; do
+            if [ -n "$tag" ]; then
+              echo "  - $tag"
+            fi
+          done
+        else
+          echo "Image built locally (not pushed to registry)"
+        fi

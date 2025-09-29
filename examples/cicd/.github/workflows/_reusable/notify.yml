@@ -1,0 +1,278 @@
+name: Reusable Notification Workflow
+
+on:
+  workflow_call:
+    inputs:
+      status:
+        description: 'Deployment status (success, failure, warning)'
+        required: true
+        type: string
+      environment:
+        description: 'Target environment'
+        required: true
+        type: string
+      image-tag:
+        description: 'Container image tag deployed'
+        required: false
+        type: string
+      coverage:
+        description: 'Test coverage percentage'
+        required: false
+        type: string
+      deployment-url:
+        description: 'URL of the deployment'
+        required: false
+        type: string
+      failed-environments:
+        description: 'List of failed environments'
+        required: false
+        type: string
+      message:
+        description: 'Custom notification message'
+        required: false
+        type: string
+
+jobs:
+  # Send Slack notifications
+  slack-notification:
+    name: Send Slack Notification
+    runs-on: ubuntu-latest
+    if: vars.ENABLE_SLACK_NOTIFICATIONS != 'false'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Send Slack notification
+      uses: ./.github/actions/notify-slack
+      with:
+        webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+        status: ${{ inputs.status }}
+        environment: ${{ inputs.environment }}
+        image-tag: ${{ inputs.image-tag }}
+        coverage: ${{ inputs.coverage }}
+        deployment-url: ${{ inputs.deployment-url }}
+        failed-environments: ${{ inputs.failed-environments }}
+        message: ${{ inputs.message }}
+
+  # Send email notifications for critical events
+  email-notification:
+    name: Send Email Notification
+    runs-on: ubuntu-latest
+    if: (inputs.status == 'failure' && inputs.environment == 'production') || vars.ENABLE_EMAIL_NOTIFICATIONS == 'true'
+
+    steps:
+    - name: Prepare email content
+      id: email
+      run: |
+        STATUS="${{ inputs.status }}"
+        ENV="${{ inputs.environment }}"
+        IMAGE_TAG="${{ inputs.image-tag }}"
+        DEPLOYMENT_URL="${{ inputs.deployment-url }}"
+        FAILED_ENVS="${{ inputs.failed-environments }}"
+        
+        # Build email subject
+        if [ "$STATUS" = "failure" ]; then
+          SUBJECT="🚨 URGENT: Production Deployment Failed - ${{ github.repository }}"
+        else
+          SUBJECT="📋 Deployment Notification: $ENV - ${{ github.repository }}"
+        fi
+        
+        # Build email body
+        cat > email_body.txt << 'EOF'
+        Deployment Notification
+        
+        Repository: ${{ github.repository }}
+        Environment: ${{ inputs.environment }}
+        Status: ${{ inputs.status }}
+        Branch: ${{ github.ref_name }}
+        Commit: ${{ github.sha }}
+        Image Tag: ${{ inputs.image-tag }}
+        EOF
+        
+        if [ -n "$FAILED_ENVS" ]; then
+          echo "" >> email_body.txt
+          echo "Failed Environments: $FAILED_ENVS" >> email_body.txt
+        fi
+        
+        if [ -n "$DEPLOYMENT_URL" ]; then
+          echo "" >> email_body.txt
+          echo "Application URL: $DEPLOYMENT_URL" >> email_body.txt
+        fi
+        
+        cat >> email_body.txt << 'EOF'
+        
+        Workflow Details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        
+        ---
+        This is an automated notification from the CI/CD pipeline.
+        EOF
+        
+        echo "subject=$SUBJECT" >> $GITHUB_OUTPUT
+
+    - name: Send email
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: ${{ secrets.SMTP_SERVER }}
+        server_port: ${{ secrets.SMTP_PORT }}
+        username: ${{ secrets.SMTP_USERNAME }}
+        password: ${{ secrets.SMTP_PASSWORD }}
+        subject: ${{ steps.email.outputs.subject }}
+        body: file://email_body.txt
+        to: ${{ secrets.NOTIFICATION_EMAIL }}
+        from: ${{ secrets.SMTP_FROM }}
+      continue-on-error: true
+
+  # Update GitHub deployment status
+  github-deployment:
+    name: Update GitHub Deployment
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Create deployment status
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const status = '${{ inputs.status }}' === 'success' ? 'success' : 'failure';
+          const environment = '${{ inputs.environment }}';
+          const deploymentUrl = '${{ inputs.deployment-url }}';
+          
+          // Find existing deployment
+          const deployments = await github.rest.repos.listDeployments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            environment: environment,
+            per_page: 1
+          });
+          
+          if (deployments.data.length > 0) {
+            const deployment = deployments.data[0];
+            
+            // Update deployment status
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: deployment.id,
+              state: status,
+              environment_url: deploymentUrl,
+              description: `Deployment ${status} for ${environment}`,
+              auto_inactive: status === 'success'
+            });
+            
+            console.log(`Updated deployment status to ${status} for environment ${environment}`);
+          } else {
+            console.log(`No existing deployment found for environment ${environment}`);
+          }
+
+  # Create GitHub issue for failed production deployments
+  create-issue:
+    name: Create GitHub Issue
+    runs-on: ubuntu-latest
+    if: inputs.status == 'failure' && inputs.environment == 'production'
+
+    steps:
+    - name: Create issue for failed production deployment
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const title = `🚨 Production Deployment Failed - ${context.sha.substring(0, 7)}`;
+          const body = `## Production Deployment Failure
+          
+          **Environment:** ${{ inputs.environment }}
+          **Status:** ${{ inputs.status }}
+          **Image Tag:** ${{ inputs.image-tag }}
+          **Branch:** ${{ github.ref_name }}
+          **Commit:** ${{ github.sha }}
+          **Workflow Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          ### Failed Environments
+          ${{ inputs.failed-environments }}
+
+          ### Next Steps
+          - [ ] Investigate the deployment failure
+          - [ ] Check application logs
+          - [ ] Verify infrastructure status
+          - [ ] Plan rollback if necessary
+          - [ ] Fix underlying issues
+          - [ ] Re-deploy when ready
+
+          ### Deployment Details
+          - **Triggered by:** ${{ github.actor }}
+          - **Timestamp:** ${new Date().toISOString()}
+          - **Coverage:** ${{ inputs.coverage }}%
+
+          This issue was automatically created by the CI/CD pipeline.`;
+
+          const issue = await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: title,
+            body: body,
+            labels: ['deployment-failure', 'production', 'urgent']
+          });
+          
+          console.log(`Created issue #${issue.data.number} for production deployment failure`);
+
+  # Send notifications to monitoring systems
+  monitoring-notification:
+    name: Send Monitoring Notification
+    runs-on: ubuntu-latest
+    if: inputs.environment == 'production'
+
+    steps:
+    - name: Send to monitoring webhook
+      run: |
+        STATUS="${{ inputs.status }}"
+        ENV="${{ inputs.environment }}"
+        IMAGE_TAG="${{ inputs.image-tag }}"
+        
+        # Prepare monitoring payload
+        cat > payload.json << EOF
+        {
+          "event_type": "deployment",
+          "status": "$STATUS",
+          "environment": "$ENV",
+          "service": "rwwwrse",
+          "version": "$IMAGE_TAG",
+          "repository": "${{ github.repository }}",
+          "branch": "${{ github.ref_name }}",
+          "commit": "${{ github.sha }}",
+          "workflow_run": "${{ github.run_id }}",
+          "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        }
+        EOF
+        
+        # Send to monitoring webhook if configured
+        if [ -n "${{ secrets.MONITORING_WEBHOOK_URL }}" ]; then
+          curl -X POST \
+            -H "Content-Type: application/json" \
+            -d @payload.json \
+            "${{ secrets.MONITORING_WEBHOOK_URL }}" || true
+        fi
+      continue-on-error: true
+
+  # Summary
+  notification-summary:
+    name: Notification Summary
+    runs-on: ubuntu-latest
+    needs: [slack-notification, email-notification, github-deployment, create-issue, monitoring-notification]
+    if: always()
+
+    steps:
+    - name: Create notification summary
+      run: |
+        echo "## Notification Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Channel | Status | Result |" >> $GITHUB_STEP_SUMMARY
+        echo "|---------|--------|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Slack | ${{ needs.slack-notification.result }} | ${{ needs.slack-notification.result == 'success' && '✅' || needs.slack-notification.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Email | ${{ needs.email-notification.result }} | ${{ needs.email-notification.result == 'success' && '✅' || needs.email-notification.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| GitHub Deployment | ${{ needs.github-deployment.result }} | ${{ needs.github-deployment.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Issue Creation | ${{ needs.create-issue.result }} | ${{ needs.create-issue.result == 'success' && '✅' || needs.create-issue.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Monitoring | ${{ needs.monitoring-notification.result }} | ${{ needs.monitoring-notification.result == 'success' && '✅' || needs.monitoring-notification.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Notification Details:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Status: ${{ inputs.status }}" >> $GITHUB_STEP_SUMMARY
+        echo "- Environment: ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+        echo "- Image Tag: ${{ inputs.image-tag }}" >> $GITHUB_STEP_SUMMARY
+        echo "- Coverage: ${{ inputs.coverage }}%" >> $GITHUB_STEP_SUMMARY

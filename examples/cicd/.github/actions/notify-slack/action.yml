@@ -1,0 +1,278 @@
+name: 'Send Slack Notification'
+description: 'Send rich Slack notifications for deployment events'
+
+inputs:
+  webhook-url:
+    description: 'Slack webhook URL'
+    required: true
+  status:
+    description: 'Deployment status (success, failure, warning)'
+    required: true
+  environment:
+    description: 'Target environment'
+    required: true
+  image-tag:
+    description: 'Container image tag deployed'
+    required: false
+  coverage:
+    description: 'Test coverage percentage'
+    required: false
+  deployment-url:
+    description: 'URL of the deployment'
+    required: false
+  failed-environments:
+    description: 'List of failed environments'
+    required: false
+  message:
+    description: 'Custom notification message'
+    required: false
+  title:
+    description: 'Custom notification title'
+    required: false
+  color:
+    description: 'Custom notification color'
+    required: false
+  fields:
+    description: 'Custom fields as JSON array'
+    required: false
+  actions:
+    description: 'Custom actions as JSON array'
+    required: false
+
+runs:
+  using: 'composite'
+  steps:
+  - name: Validate inputs
+    shell: bash
+    run: |
+      echo "Validating Slack notification inputs..."
+      
+      # Validate webhook URL
+      if [ -z "${{ inputs.webhook-url }}" ]; then
+        echo "ERROR: Slack webhook URL is required"
+        exit 1
+      fi
+      
+      if [[ ! "${{ inputs.webhook-url }}" =~ ^https://hooks.slack.com/services/ ]]; then
+        echo "WARNING: Webhook URL doesn't appear to be a valid Slack webhook"
+      fi
+      
+      # Validate status
+      case "${{ inputs.status }}" in
+        success|failure|warning)
+          echo "✅ Valid status: ${{ inputs.status }}"
+          ;;
+        *)
+          echo "ERROR: Invalid status. Must be one of: success, failure, warning"
+          exit 1
+          ;;
+      esac
+      
+      echo "✅ All inputs validated successfully"
+
+  - name: Prepare notification content
+    shell: bash
+    id: content
+    run: |
+      echo "Preparing Slack notification content..."
+      
+      STATUS="${{ inputs.status }}"
+      ENV="${{ inputs.environment }}"
+      IMAGE_TAG="${{ inputs.image-tag }}"
+      COVERAGE="${{ inputs.coverage }}"
+      DEPLOYMENT_URL="${{ inputs.deployment-url }}"
+      FAILED_ENVS="${{ inputs.failed-environments }}"
+      CUSTOM_MESSAGE="${{ inputs.message }}"
+      CUSTOM_TITLE="${{ inputs.title }}"
+      CUSTOM_COLOR="${{ inputs.color }}"
+      
+      # Set status emoji and color
+      if [ -n "$CUSTOM_COLOR" ]; then
+        COLOR="$CUSTOM_COLOR"
+      else
+        case "$STATUS" in
+          "success")
+            EMOJI="✅"
+            COLOR="good"
+            ;;
+          "failure")
+            EMOJI="❌"
+            COLOR="danger"
+            ;;
+          "warning")
+            EMOJI="⚠️"
+            COLOR="warning"
+            ;;
+          *)
+            EMOJI="ℹ️"
+            COLOR="#439FE0"
+            ;;
+        esac
+      fi
+      
+      # Build notification title
+      if [ -n "$CUSTOM_TITLE" ]; then
+        TITLE="$CUSTOM_TITLE"
+      elif [ -n "$CUSTOM_MESSAGE" ]; then
+        TITLE="$EMOJI $CUSTOM_MESSAGE"
+      else
+        TITLE="$EMOJI Deployment to $ENV: $STATUS"
+      fi
+      
+      # Build notification text
+      TEXT="Deployment notification for ${{ github.repository }}"
+      
+      echo "title=$TITLE" >> $GITHUB_OUTPUT
+      echo "text=$TEXT" >> $GITHUB_OUTPUT
+      echo "color=$COLOR" >> $GITHUB_OUTPUT
+      echo "emoji=$EMOJI" >> $GITHUB_OUTPUT
+
+  - name: Build notification fields
+    shell: bash
+    id: fields
+    run: |
+      echo "Building notification fields..."
+      
+      # Use custom fields if provided
+      if [ -n "${{ inputs.fields }}" ]; then
+        echo "fields=${{ inputs.fields }}" >> $GITHUB_OUTPUT
+        exit 0
+      fi
+      
+      # Build default fields
+      FIELDS="["
+      
+      # Environment field
+      FIELDS="$FIELDS{\"title\":\"Environment\",\"value\":\"${{ inputs.environment }}\",\"short\":true},"
+      
+      # Status field
+      FIELDS="$FIELDS{\"title\":\"Status\",\"value\":\"${{ inputs.status }}\",\"short\":true},"
+      
+      # Image tag field
+      if [ -n "${{ inputs.image-tag }}" ]; then
+        FIELDS="$FIELDS{\"title\":\"Image Tag\",\"value\":\"${{ inputs.image-tag }}\",\"short\":true},"
+      fi
+      
+      # Coverage field
+      if [ -n "${{ inputs.coverage }}" ] && [ "${{ inputs.coverage }}" != "unknown" ]; then
+        FIELDS="$FIELDS{\"title\":\"Coverage\",\"value\":\"${{ inputs.coverage }}%\",\"short\":true},"
+      fi
+      
+      # Failed environments field
+      if [ -n "${{ inputs.failed-environments }}" ]; then
+        FIELDS="$FIELDS{\"title\":\"Failed Environments\",\"value\":\"${{ inputs.failed-environments }}\",\"short\":false},"
+      fi
+      
+      # Repository field
+      FIELDS="$FIELDS{\"title\":\"Repository\",\"value\":\"${{ github.repository }}\",\"short\":true},"
+      
+      # Branch field
+      FIELDS="$FIELDS{\"title\":\"Branch\",\"value\":\"${{ github.ref_name }}\",\"short\":true},"
+      
+      # Commit field
+      COMMIT_SHORT="${{ github.sha }}"
+      COMMIT_SHORT="${COMMIT_SHORT:0:7}"
+      FIELDS="$FIELDS{\"title\":\"Commit\",\"value\":\"<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|$COMMIT_SHORT>\",\"short\":true},"
+      
+      # Workflow run field
+      FIELDS="$FIELDS{\"title\":\"Workflow Run\",\"value\":\"<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Details>\",\"short\":true}"
+      
+      FIELDS="$FIELDS]"
+      
+      echo "fields=$FIELDS" >> $GITHUB_OUTPUT
+
+  - name: Build notification actions
+    shell: bash
+    id: actions
+    run: |
+      echo "Building notification actions..."
+      
+      # Use custom actions if provided
+      if [ -n "${{ inputs.actions }}" ]; then
+        echo "actions=${{ inputs.actions }}" >> $GITHUB_OUTPUT
+        exit 0
+      fi
+      
+      # Build default actions
+      ACTIONS="["
+      
+      # View application button
+      if [ -n "${{ inputs.deployment-url }}" ]; then
+        ACTIONS="$ACTIONS{\"type\":\"button\",\"text\":\"View Application\",\"url\":\"${{ inputs.deployment-url }}\"},"
+      fi
+      
+      # View workflow button
+      ACTIONS="$ACTIONS{\"type\":\"button\",\"text\":\"View Workflow\",\"url\":\"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}"
+      
+      ACTIONS="$ACTIONS]"
+      
+      echo "actions=$ACTIONS" >> $GITHUB_OUTPUT
+
+  - name: Create Slack payload
+    shell: bash
+    id: payload
+    run: |
+      echo "Creating Slack payload..."
+      
+      # Create the payload file
+      cat > slack_payload.json << EOF
+      {
+        "username": "GitHub Actions",
+        "icon_emoji": ":github:",
+        "attachments": [
+          {
+            "color": "${{ steps.content.outputs.color }}",
+            "title": "${{ steps.content.outputs.title }}",
+            "text": "${{ steps.content.outputs.text }}",
+            "fields": ${{ steps.fields.outputs.fields }},
+            "footer": "GitHub Actions",
+            "footer_icon": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+            "ts": $(date +%s)
+          }
+        ]
+      }
+      EOF
+      
+      echo "Slack payload created:"
+      cat slack_payload.json | jq .
+
+  - name: Send Slack notification
+    shell: bash
+    run: |
+      echo "Sending Slack notification..."
+      
+      # Send the notification
+      RESPONSE=$(curl -s -X POST \
+        -H "Content-Type: application/json" \
+        -d @slack_payload.json \
+        "${{ inputs.webhook-url }}")
+      
+      # Check response
+      if [ "$RESPONSE" = "ok" ]; then
+        echo "✅ Slack notification sent successfully"
+      else
+        echo "❌ Failed to send Slack notification"
+        echo "Response: $RESPONSE"
+        exit 1
+      fi
+
+  - name: Send fallback notification
+    if: failure()
+    shell: bash
+    run: |
+      echo "Sending fallback Slack notification..."
+      
+      # Create simple fallback payload
+      cat > slack_fallback.json << EOF
+      {
+        "text": "${{ steps.content.outputs.emoji }} Deployment to ${{ inputs.environment }}: ${{ inputs.status }}",
+        "username": "GitHub Actions",
+        "icon_emoji": ":github:"
+      }
+      EOF
+      
+      # Send fallback notification
+      curl -s -X POST \
+        -H "Content-Type: application/json" \
+        -d @slack_fallback.json \
+        "${{ inputs.webhook-url }}" || echo "Fallback notification also failed"

@@ -1,0 +1,346 @@
+# Notification Configuration for CD Pipeline
+# This file defines notification settings for different deployment events
+
+# Global notification settings
+global:
+  enabled: true
+  timezone: "UTC"
+  date_format: "%Y-%m-%d %H:%M:%S"
+  
+  # Default notification channels
+  default_channels:
+    - slack
+  
+  # Notification triggers
+  triggers:
+    on_start: false
+    on_success: true
+    on_failure: true
+    on_warning: true
+    on_rollback: true
+    on_approval_required: true
+
+# Slack notification configuration
+slack:
+  enabled: true
+  
+  # Webhook configuration
+  webhook:
+    url_secret: "SLACK_WEBHOOK_URL"
+    timeout: 30
+    retry_attempts: 3
+  
+  # Message formatting
+  formatting:
+    username: "GitHub Actions"
+    icon_emoji: ":github:"
+    channel_override: null  # Use webhook default
+    
+    # Color scheme
+    colors:
+      success: "good"
+      failure: "danger"
+      warning: "warning"
+      info: "#439FE0"
+      rollback: "#FF9500"
+  
+  # Message templates
+  templates:
+    success:
+      title: "✅ Deployment Successful"
+      message: "Deployment to {environment} completed successfully"
+      include_fields: ["environment", "image_tag", "coverage", "duration"]
+    
+    failure:
+      title: "❌ Deployment Failed"
+      message: "Deployment to {environment} failed"
+      include_fields: ["environment", "image_tag", "error", "failed_step"]
+      mention_users: ["@channel"]
+    
+    warning:
+      title: "⚠️ Deployment Warning"
+      message: "Deployment to {environment} completed with warnings"
+      include_fields: ["environment", "image_tag", "warnings"]
+    
+    rollback:
+      title: "🔄 Deployment Rolled Back"
+      message: "Deployment to {environment} was rolled back"
+      include_fields: ["environment", "previous_version", "rollback_reason"]
+      mention_users: ["@here"]
+    
+    approval_required:
+      title: "🔒 Approval Required"
+      message: "Deployment to {environment} requires manual approval"
+      include_fields: ["environment", "image_tag", "approvers"]
+  
+  # Environment-specific settings
+  environments:
+    production:
+      enabled: true
+      channel_override: "#production-deployments"
+      mention_users: ["@devops-team"]
+      include_additional_fields: ["security_scan", "performance_metrics"]
+    
+    staging:
+      enabled: true
+      channel_override: "#staging-deployments"
+      mention_users: []
+    
+    development:
+      enabled: false  # Disable for dev to reduce noise
+      channel_override: "#dev-deployments"
+
+# Email notification configuration
+email:
+  enabled: true
+  
+  # SMTP configuration
+  smtp:
+    server_secret: "SMTP_SERVER"
+    port_secret: "SMTP_PORT"
+    username_secret: "SMTP_USERNAME"
+    password_secret: "SMTP_PASSWORD"
+    from_secret: "SMTP_FROM"
+    timeout: 30
+  
+  # Recipients
+  recipients:
+    default: "NOTIFICATION_EMAIL"
+    production_failures: "PRODUCTION_ALERT_EMAIL"
+    security_alerts: "SECURITY_TEAM_EMAIL"
+  
+  # Email templates
+  templates:
+    success:
+      subject: "✅ Deployment Success: {environment} - {repository}"
+      include_logs: false
+      include_metrics: true
+    
+    failure:
+      subject: "🚨 URGENT: Deployment Failed: {environment} - {repository}"
+      include_logs: true
+      include_metrics: true
+      include_troubleshooting: true
+    
+    rollback:
+      subject: "🔄 Deployment Rollback: {environment} - {repository}"
+      include_logs: true
+      include_metrics: false
+  
+  # Trigger conditions
+  triggers:
+    production_failure: true
+    staging_failure: false
+    development_failure: false
+    security_scan_failure: true
+    performance_degradation: true
+
+# GitHub notification configuration
+github:
+  enabled: true
+  
+  # Deployment status updates
+  deployment_status:
+    enabled: true
+    auto_inactive: true
+    include_environment_url: true
+  
+  # Issue creation
+  issue_creation:
+    enabled: true
+    
+    # Conditions for creating issues
+    conditions:
+      production_failure: true
+      security_vulnerability: true
+      performance_degradation: true
+      repeated_failures: true  # 3+ consecutive failures
+    
+    # Issue templates
+    templates:
+      production_failure:
+        title: "🚨 Production Deployment Failed - {commit_short}"
+        labels: ["deployment-failure", "production", "urgent"]
+        assignees: ["@devops-team"]
+        milestone: "Current Sprint"
+      
+      security_vulnerability:
+        title: "🔒 Security Vulnerability Detected - {commit_short}"
+        labels: ["security", "vulnerability", "urgent"]
+        assignees: ["@security-team"]
+      
+      performance_degradation:
+        title: "📉 Performance Degradation Detected - {commit_short}"
+        labels: ["performance", "monitoring", "investigation"]
+        assignees: ["@performance-team"]
+  
+  # Pull request comments
+  pr_comments:
+    enabled: true
+    include_deployment_status: true
+    include_test_results: true
+    include_security_scan: true
+
+# Microsoft Teams notification configuration
+teams:
+  enabled: false
+  
+  webhook:
+    url_secret: "TEAMS_WEBHOOK_URL"
+    timeout: 30
+  
+  # Card formatting
+  card_format:
+    theme_color: "auto"  # Based on status
+    include_actions: true
+    include_facts: true
+
+# PagerDuty integration for critical alerts
+pagerduty:
+  enabled: false
+  
+  integration:
+    key_secret: "PAGERDUTY_INTEGRATION_KEY"
+    timeout: 30
+  
+  # Alert conditions
+  alert_conditions:
+    production_failure: true
+    security_incident: true
+    service_down: true
+  
+  # Severity mapping
+  severity_mapping:
+    production_failure: "critical"
+    staging_failure: "warning"
+    security_incident: "critical"
+    performance_issue: "warning"
+
+# Monitoring system notifications
+monitoring:
+  enabled: true
+  
+  # Webhook for monitoring systems
+  webhook:
+    url_secret: "MONITORING_WEBHOOK_URL"
+    timeout: 30
+    format: "json"
+  
+  # Metrics to include
+  metrics:
+    deployment_duration: true
+    success_rate: true
+    rollback_rate: true
+    error_rate: true
+    response_time: true
+  
+  # Event types to send
+  events:
+    deployment_start: true
+    deployment_complete: true
+    deployment_failure: true
+    rollback_complete: true
+
+# Custom webhook notifications
+custom_webhooks:
+  enabled: false
+  
+  webhooks:
+    - name: "internal-dashboard"
+      url_secret: "INTERNAL_DASHBOARD_WEBHOOK"
+      events: ["deployment_complete", "deployment_failure"]
+      format: "json"
+      timeout: 15
+    
+    - name: "audit-system"
+      url_secret: "AUDIT_SYSTEM_WEBHOOK"
+      events: ["all"]
+      format: "json"
+      include_sensitive_data: false
+
+# Notification filtering and rate limiting
+filtering:
+  # Rate limiting
+  rate_limit:
+    enabled: true
+    max_notifications_per_hour: 50
+    max_notifications_per_day: 200
+    cooldown_period: 300  # 5 minutes between similar notifications
+  
+  # Duplicate detection
+  duplicate_detection:
+    enabled: true
+    time_window: 600  # 10 minutes
+    similarity_threshold: 0.8
+  
+  # Noise reduction
+  noise_reduction:
+    enabled: true
+    suppress_repeated_failures: true  # After 3 consecutive failures
+    suppress_flaky_tests: true
+    suppress_known_issues: true
+
+# Environment-specific notification overrides
+environment_overrides:
+  production:
+    slack:
+      enabled: true
+      mention_users: ["@devops-team", "@on-call"]
+    email:
+      enabled: true
+      recipients: ["production-alerts@company.com"]
+    github:
+      issue_creation:
+        enabled: true
+    pagerduty:
+      enabled: true
+  
+  staging:
+    slack:
+      enabled: true
+      mention_users: []
+    email:
+      enabled: false
+    github:
+      issue_creation:
+        enabled: false
+  
+  development:
+    slack:
+      enabled: false
+    email:
+      enabled: false
+    github:
+      issue_creation:
+        enabled: false
+  
+  synology:
+    slack:
+      enabled: true
+      channel_override: "#synology-deployments"
+      mention_users: ["@homelab-team"]
+      include_additional_fields: ["deployment_metadata", "container_status"]
+    email:
+      enabled: true
+      recipients: ["homelab-admin@company.com"]
+    github:
+      issue_creation:
+        enabled: true
+        conditions:
+          deployment_failure: true
+          container_health_failure: true
+
+# Notification testing and validation
+testing:
+  enabled: true
+  
+  # Test notifications
+  test_channels:
+    - "#cicd-testing"
+    - "test-notifications@company.com"
+  
+  # Validation rules
+  validation:
+    check_webhook_connectivity: true
+    validate_templates: true
+    test_rate_limits: true

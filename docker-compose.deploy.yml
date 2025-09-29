@@ -1,0 +1,80 @@
+# Deployment Docker Compose for rwwwrse reverse proxy
+# This file is used for production deployments on Synology NAS
+
+services:
+  rwwwrse:
+    image: ghcr.io/albedosehen/rwwwrse:${IMAGE_TAG:-latest}
+    container_name: rwwwrse-app
+    ports:
+      - "8080:8080"   # HTTP port
+      - "8443:8443"   # HTTPS port  
+      - "9090:9090"   # Metrics port
+    environment:
+      # Server configuration
+      RWWWRSE_SERVER_HOST: "0.0.0.0"
+      RWWWRSE_SERVER_PORT: "8080"
+      RWWWRSE_SERVER_HTTPS_PORT: "8443"
+      
+      # TLS configuration
+      RWWWRSE_TLS_ENABLED: "true"
+      RWWWRSE_TLS_AUTO_CERT: "${TLS_AUTO_CERT:-false}"
+      RWWWRSE_TLS_EMAIL: "${TLS_EMAIL:-}"
+      RWWWRSE_TLS_DOMAINS: "${TLS_DOMAINS:-}"
+      RWWWRSE_TLS_CACHE_DIR: "/app/certs"
+      
+      # Backend routing configuration
+      RWWWRSE_BACKENDS_ROUTES: "${BACKENDS_ROUTES:-{}}"
+      
+      # Logging configuration
+      RWWWRSE_LOGGING_LEVEL: "${LOG_LEVEL:-info}"
+      RWWWRSE_LOGGING_FORMAT: "json"
+      
+      # Health check configuration
+      RWWWRSE_HEALTH_ENABLED: "true"
+      RWWWRSE_HEALTH_INTERVAL: "30s"
+      RWWWRSE_HEALTH_TIMEOUT: "10s"
+      
+      # Metrics configuration
+      RWWWRSE_METRICS_ENABLED: "true"
+      RWWWRSE_METRICS_PORT: "9090"
+      RWWWRSE_METRICS_PATH: "/metrics"
+      
+      # Security configuration
+      RWWWRSE_SECURITY_RATE_LIMIT_ENABLED: "true"
+      RWWWRSE_SECURITY_RATE_LIMIT_REQUESTS_PER_SECOND: "${RATE_LIMIT_RPS:-100}"
+      RWWWRSE_SECURITY_RATE_LIMIT_BURST_SIZE: "${RATE_LIMIT_BURST:-200}"
+      RWWWRSE_SECURITY_CORS_ENABLED: "true"
+      RWWWRSE_SECURITY_CORS_ORIGINS: "${CORS_ORIGINS:-*}"
+      RWWWRSE_SECURITY_HSTS_ENABLED: "true"
+      RWWWRSE_SECURITY_FRAME_OPTIONS: "DENY"
+      
+      # Doppler configuration (if using Doppler for secrets)
+      DOPPLER_TOKEN: "${DOPPLER_TOKEN:-}"
+      
+    volumes:
+      - rwwwrse_certs:/app/certs
+      - rwwwrse_logs:/app/logs
+    networks:
+      - rwwwrse-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    labels:
+      - "prometheus.io/scrape=true"
+      - "prometheus.io/port=9090"
+      - "prometheus.io/path=/metrics"
+
+volumes:
+  rwwwrse_certs:
+    name: rwwwrse_certs
+  rwwwrse_logs:
+    name: rwwwrse_logs
+
+networks:
+  rwwwrse-network:
+    driver: bridge
+    name: rwwwrse-net

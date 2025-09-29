@@ -1,0 +1,224 @@
+name: Deploy to Synology NAS
+
+on:
+  workflow_call:
+    inputs:
+      image_tag:
+        description: "Docker image tag to deploy"
+        type: string
+        required: true
+      image_digest:
+        description: "Container image digest for verification"
+        type: string
+        required: false
+      skip_build:
+        description: "Skip local docker build step"
+        type: boolean
+        required: false
+        default: true
+      deployment_metadata:
+        description: "JSON metadata about the deployment"
+        type: string
+        required: false
+        default: "{}"
+    outputs:
+      deployment-url:
+        description: "URL of the deployed application"
+        value: ${{ jobs.deploy-synology.outputs.deployment-url }}
+      deployment-status:
+        description: "Status of the deployment"
+        value: ${{ jobs.deploy-synology.outputs.deployment-status }}
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Docker image tag to deploy"
+        type: string
+        default: "latest"
+      skip_build:
+        description: "Skip local docker build step"
+        type: boolean
+        default: false
+
+# Global environment variables
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+# Concurrency control
+concurrency:
+  group: synology-deploy-${{ github.ref }}-${{ inputs.image_tag || 'latest' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  # Load Synology environment configuration
+  load-synology-config:
+    name: Load Synology Configuration
+    runs-on: ubuntu-latest
+    outputs:
+      config: ${{ steps.load.outputs.config }}
+      health-check-host: ${{ steps.load.outputs.health-check-host }}
+      health-check-port: ${{ steps.load.outputs.health-check-port }}
+      health-check-timeout: ${{ steps.load.outputs.health-check-timeout }}
+      compose-file: ${{ steps.load.outputs.compose-file }}
+      project-name: ${{ steps.load.outputs.project-name }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Load Synology environment configuration
+      id: load
+      run: |
+        # Load configuration from environments.yml
+        echo "Loading Synology environment configuration..."
+        
+        # Set outputs based on Synology environment configuration
+        echo "config=loaded" >> $GITHUB_OUTPUT
+        echo "health-check-host=localhost" >> $GITHUB_OUTPUT
+        echo "health-check-port=8080" >> $GITHUB_OUTPUT
+        echo "health-check-timeout=180" >> $GITHUB_OUTPUT
+        echo "compose-file=docker-compose.deploy.yml" >> $GITHUB_OUTPUT
+        echo "project-name=rwwwrse" >> $GITHUB_OUTPUT
+        
+        echo "✅ Synology configuration loaded successfully"
+
+  # Pre-deployment validation
+  pre-deployment:
+    name: Pre-deployment Validation
+    runs-on: ubuntu-latest
+    needs: load-synology-config
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Validate container image
+      if: inputs.skip_build == true
+      run: |
+        IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+        echo "Validating container image: $IMAGE"
+        
+        # Check if image exists in registry (for external images)
+        if [ "${{ inputs.skip_build }}" = "true" ]; then
+          echo "Skipping image validation for local build"
+        else
+          if docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
+            echo "✅ Container image exists and is accessible"
+          else
+            echo "❌ Container image not found or not accessible: $IMAGE"
+            exit 1
+          fi
+        fi
+
+    - name: Validate deployment configuration
+      run: |
+        echo "Validating deployment configuration..."
+        
+        # Check if required files exist
+        REQUIRED_FILES=(
+          "${{ needs.load-synology-config.outputs.compose-file }}"
+          "Dockerfile"
+          "go.mod"
+          "cmd/rwwwrse/main.go"
+        )
+        
+        for file in "${REQUIRED_FILES[@]}"; do
+          if [ ! -f "$file" ]; then
+            echo "❌ Required file not found: $file"
+            exit 1
+          fi
+          echo "✅ Found required file: $file"
+        done
+
+  # Main deployment job
+  deploy-synology:
+    name: Deploy to Synology NAS
+    runs-on: [self-hosted, synology]
+    needs: [load-synology-config, pre-deployment]
+    timeout-minutes: 30
+    outputs:
+      deployment-url: ${{ steps.deploy.outputs.deployment-url }}
+      deployment-status: ${{ steps.deploy.outputs.deployment-status }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
+
+    - name: Initialize submodules
+      run: |
+        echo "Initializing git submodules..."
+        git submodule update --init --recursive || echo "No submodules found or already initialized"
+
+    - name: Deploy using Synology composite action
+      id: deploy
+      uses: ./.github/actions/deploy-synology
+      with:
+        image-tag: ${{ inputs.image_tag }}
+        image-digest: ${{ inputs.image_digest }}
+        skip-build: ${{ inputs.skip_build }}
+        compose-file: ${{ needs.load-synology-config.outputs.compose-file }}
+        project-name: ${{ needs.load-synology-config.outputs.project-name }}
+        health-check-host: ${{ needs.load-synology-config.outputs.health-check-host }}
+        health-check-port: ${{ needs.load-synology-config.outputs.health-check-port }}
+        health-check-timeout: ${{ needs.load-synology-config.outputs.health-check-timeout }}
+        deployment-timeout: "30"
+
+  # Post-deployment notification
+  notify-deployment:
+    name: Notify Deployment Status
+    runs-on: ubuntu-latest
+    needs: [load-synology-config, deploy-synology]
+    if: always()
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Determine notification status
+      id: status
+      run: |
+        if [ "${{ needs.deploy-synology.result }}" = "success" ]; then
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "message=Synology deployment completed successfully" >> $GITHUB_OUTPUT
+        else
+          echo "status=failure" >> $GITHUB_OUTPUT
+          echo "message=Synology deployment failed" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Send deployment notification
+      uses: ./.github/actions/notify-slack
+      with:
+        status: ${{ steps.status.outputs.status }}
+        environment: "synology"
+        image-tag: ${{ inputs.image_tag }}
+        deployment-url: ${{ needs.deploy-synology.outputs.deployment-url }}
+        message: ${{ steps.status.outputs.message }}
+        webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+    - name: Create deployment summary
+      run: |
+        echo "## Synology Deployment Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
+        echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Environment | Synology NAS |" >> $GITHUB_STEP_SUMMARY
+        echo "| Image Tag | ${{ inputs.image_tag }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Skip Build | ${{ inputs.skip_build }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Status | ${{ needs.deploy-synology.result == 'success' && '✅ Success' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Deployment URL | ${{ needs.deploy-synology.outputs.deployment-url }} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ needs.deploy-synology.result }}" = "success" ]; then
+          echo "### ✅ Deployment Successful" >> $GITHUB_STEP_SUMMARY
+          echo "The application has been successfully deployed to Synology NAS." >> $GITHUB_STEP_SUMMARY
+        else
+          echo "### ❌ Deployment Failed" >> $GITHUB_STEP_SUMMARY
+          echo "The deployment to Synology NAS encountered errors. Please check the logs for details." >> $GITHUB_STEP_SUMMARY
+        fi

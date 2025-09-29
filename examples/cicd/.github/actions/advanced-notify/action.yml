@@ -1,0 +1,561 @@
+name: 'Advanced Notification System'
+description: 'Multi-channel notification system with templates, routing, rate limiting, and escalation'
+
+inputs:
+  event-type:
+    description: 'Type of event (deployment, failure, rollback, security, etc.)'
+    required: true
+  severity:
+    description: 'Event severity (low, medium, high, critical)'
+    required: true
+  environment:
+    description: 'Target environment'
+    required: true
+  correlation-id:
+    description: 'Correlation ID for tracking'
+    required: false
+  template-name:
+    description: 'Notification template to use'
+    required: false
+  custom-data:
+    description: 'Custom data as JSON for template rendering'
+    required: false
+    default: '{}'
+  channels:
+    description: 'Comma-separated list of notification channels'
+    required: false
+    default: 'slack'
+  escalation-enabled:
+    description: 'Enable escalation for critical events'
+    required: false
+    default: 'true'
+  rate-limit-key:
+    description: 'Key for rate limiting (prevents spam)'
+    required: false
+  deduplication-window:
+    description: 'Deduplication window in seconds'
+    required: false
+    default: '300'
+
+outputs:
+  notifications-sent:
+    description: 'Number of notifications sent successfully'
+    value: ${{ steps.send.outputs.notifications-sent }}
+  failed-channels:
+    description: 'Channels that failed to receive notifications'
+    value: ${{ steps.send.outputs.failed-channels }}
+  escalation-triggered:
+    description: 'Whether escalation was triggered'
+    value: ${{ steps.escalation.outputs.triggered }}
+  rate-limited:
+    description: 'Whether notification was rate limited'
+    value: ${{ steps.rate-limit.outputs.limited }}
+
+runs:
+  using: 'composite'
+  steps:
+  - name: Setup notification context
+    id: setup
+    shell: bash
+    run: |
+      echo "Setting up notification context..."
+      
+      # Generate correlation ID if not provided
+      if [ -z "${{ inputs.correlation-id }}" ]; then
+        CORRELATION_ID="notify-$(date +%s)-$(uuidgen | cut -d'-' -f1)"
+      else
+        CORRELATION_ID="${{ inputs.correlation-id }}"
+      fi
+      
+      echo "correlation-id=$CORRELATION_ID" >> $GITHUB_OUTPUT
+      echo "CORRELATION_ID=$CORRELATION_ID" >> $GITHUB_ENV
+      
+      # Setup notification tracking
+      mkdir -p .notifications
+      echo "$(date +%s)" > .notifications/timestamp
+      
+      echo "✅ Notification context initialized"
+      echo "Event Type: ${{ inputs.event-type }}"
+      echo "Severity: ${{ inputs.severity }}"
+      echo "Environment: ${{ inputs.environment }}"
+      echo "Correlation ID: $CORRELATION_ID"
+
+  - name: Check rate limiting
+    id: rate-limit
+    shell: bash
+    run: |
+      echo "Checking rate limiting..."
+      
+      RATE_LIMITED=false
+      
+      if [ -n "${{ inputs.rate-limit-key }}" ]; then
+        RATE_KEY="${{ inputs.rate-limit-key }}"
+        RATE_FILE=".notifications/rate-${RATE_KEY}"
+        CURRENT_TIME=$(date +%s)
+        WINDOW_SIZE=3600  # 1 hour window
+        MAX_NOTIFICATIONS=10  # Max 10 notifications per hour per key
+        
+        # Clean old rate limit entries
+        if [ -f "$RATE_FILE" ]; then
+          # Count notifications in the last hour
+          RECENT_COUNT=$(awk -v cutoff=$((CURRENT_TIME - WINDOW_SIZE)) '$1 > cutoff' "$RATE_FILE" | wc -l)
+          
+          if [ "$RECENT_COUNT" -ge "$MAX_NOTIFICATIONS" ]; then
+            RATE_LIMITED=true
+            echo "⚠️ Rate limit exceeded for key: $RATE_KEY"
+            echo "Recent notifications: $RECENT_COUNT"
+          fi
+        fi
+        
+        # Record this notification attempt
+        echo "$CURRENT_TIME" >> "$RATE_FILE"
+        
+        # Clean old entries from rate file
+        awk -v cutoff=$((CURRENT_TIME - WINDOW_SIZE)) '$1 > cutoff' "$RATE_FILE" > "${RATE_FILE}.tmp" && mv "${RATE_FILE}.tmp" "$RATE_FILE"
+      fi
+      
+      echo "limited=$RATE_LIMITED" >> $GITHUB_OUTPUT
+      echo "RATE_LIMITED=$RATE_LIMITED" >> $GITHUB_ENV
+      
+      if [ "$RATE_LIMITED" = "true" ]; then
+        echo "🚫 Notification rate limited - skipping"
+        exit 0
+      fi
+
+  - name: Check deduplication
+    id: deduplication
+    shell: bash
+    run: |
+      echo "Checking for duplicate notifications..."
+      
+      DUPLICATE=false
+      DEDUP_WINDOW=${{ inputs.deduplication-window }}
+      CURRENT_TIME=$(date +%s)
+      
+      # Create deduplication key based on event type, severity, and environment
+      DEDUP_KEY="${{ inputs.event-type }}-${{ inputs.severity }}-${{ inputs.environment }}"
+      DEDUP_FILE=".notifications/dedup-${DEDUP_KEY}"
+      
+      if [ -f "$DEDUP_FILE" ]; then
+        LAST_NOTIFICATION=$(cat "$DEDUP_FILE")
+        TIME_DIFF=$((CURRENT_TIME - LAST_NOTIFICATION))
+        
+        if [ "$TIME_DIFF" -lt "$DEDUP_WINDOW" ]; then
+          DUPLICATE=true
+          echo "⚠️ Duplicate notification detected within deduplication window"
+          echo "Last notification: $(date -d @$LAST_NOTIFICATION)"
+          echo "Time difference: ${TIME_DIFF}s"
+        fi
+      fi
+      
+      # Update deduplication timestamp
+      echo "$CURRENT_TIME" > "$DEDUP_FILE"
+      
+      echo "duplicate=$DUPLICATE" >> $GITHUB_OUTPUT
+      echo "DUPLICATE=$DUPLICATE" >> $GITHUB_ENV
+      
+      if [ "$DUPLICATE" = "true" ] && [ "${{ inputs.severity }}" != "critical" ]; then
+        echo "🚫 Duplicate notification suppressed"
+        exit 0
+      fi
+
+  - name: Load notification template
+    id: template
+    shell: bash
+    run: |
+      echo "Loading notification template..."
+      
+      TEMPLATE_NAME="${{ inputs.template-name }}"
+      if [ -z "$TEMPLATE_NAME" ]; then
+        TEMPLATE_NAME="${{ inputs.event-type }}-${{ inputs.severity }}"
+      fi
+      
+      echo "template-name=$TEMPLATE_NAME" >> $GITHUB_OUTPUT
+      echo "TEMPLATE_NAME=$TEMPLATE_NAME" >> $GITHUB_ENV
+      
+      # Load template configuration (in real implementation, this would load from config files)
+      case "$TEMPLATE_NAME" in
+        "deployment-success")
+          TITLE="✅ Deployment Successful"
+          MESSAGE="Deployment to ${{ inputs.environment }} completed successfully"
+          COLOR="good"
+          PRIORITY="low"
+          ;;
+        "deployment-failure")
+          TITLE="❌ Deployment Failed"
+          MESSAGE="Deployment to ${{ inputs.environment }} failed"
+          COLOR="danger"
+          PRIORITY="high"
+          ;;
+        "security-critical")
+          TITLE="🔒 Critical Security Alert"
+          MESSAGE="Critical security issue detected in ${{ inputs.environment }}"
+          COLOR="danger"
+          PRIORITY="critical"
+          ;;
+        "rollback-success")
+          TITLE="🔄 Rollback Completed"
+          MESSAGE="Rollback in ${{ inputs.environment }} completed successfully"
+          COLOR="warning"
+          PRIORITY="medium"
+          ;;
+        "rollback-failure")
+          TITLE="🚨 Rollback Failed"
+          MESSAGE="CRITICAL: Rollback failed in ${{ inputs.environment }}"
+          COLOR="danger"
+          PRIORITY="critical"
+          ;;
+        *)
+          TITLE="📢 Pipeline Notification"
+          MESSAGE="Event: ${{ inputs.event-type }} in ${{ inputs.environment }}"
+          COLOR="good"
+          PRIORITY="medium"
+          ;;
+      esac
+      
+      echo "title=$TITLE" >> $GITHUB_OUTPUT
+      echo "message=$MESSAGE" >> $GITHUB_OUTPUT
+      echo "color=$COLOR" >> $GITHUB_OUTPUT
+      echo "priority=$PRIORITY" >> $GITHUB_OUTPUT
+      
+      echo "NOTIFICATION_TITLE=$TITLE" >> $GITHUB_ENV
+      echo "NOTIFICATION_MESSAGE=$MESSAGE" >> $GITHUB_ENV
+      echo "NOTIFICATION_COLOR=$COLOR" >> $GITHUB_ENV
+      echo "NOTIFICATION_PRIORITY=$PRIORITY" >> $GITHUB_ENV
+
+  - name: Render notification content
+    id: render
+    shell: bash
+    run: |
+      echo "Rendering notification content..."
+      
+      # Parse custom data
+      CUSTOM_DATA='${{ inputs.custom-data }}'
+      
+      # Create enhanced notification payload
+      cat > notification-payload.json << EOF
+      {
+        "event_type": "${{ inputs.event-type }}",
+        "severity": "${{ inputs.severity }}",
+        "environment": "${{ inputs.environment }}",
+        "correlation_id": "$CORRELATION_ID",
+        "title": "$NOTIFICATION_TITLE",
+        "message": "$NOTIFICATION_MESSAGE",
+        "color": "$NOTIFICATION_COLOR",
+        "priority": "$NOTIFICATION_PRIORITY",
+        "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+        "workflow": {
+          "repository": "${{ github.repository }}",
+          "run_id": "${{ github.run_id }}",
+          "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          "actor": "${{ github.actor }}",
+          "ref": "${{ github.ref }}",
+          "sha": "${{ github.sha }}"
+        },
+        "custom_data": $CUSTOM_DATA
+      }
+      EOF
+      
+      echo "✅ Notification content rendered"
+      cat notification-payload.json | jq .
+
+  - name: Send notifications
+    id: send
+    shell: bash
+    run: |
+      echo "Sending notifications to channels..."
+      
+      CHANNELS="${{ inputs.channels }}"
+      NOTIFICATIONS_SENT=0
+      FAILED_CHANNELS=""
+      
+      IFS=',' read -ra CHANNEL_ARRAY <<< "$CHANNELS"
+      
+      for CHANNEL in "${CHANNEL_ARRAY[@]}"; do
+        CHANNEL=$(echo "$CHANNEL" | xargs)  # Trim whitespace
+        echo "Sending to channel: $CHANNEL"
+        
+        case "$CHANNEL" in
+          "slack")
+            if [ -n "${{ secrets.SLACK_WEBHOOK_URL }}" ]; then
+              echo "Sending Slack notification..."
+              
+              # Create Slack-specific payload
+              cat > slack-payload.json << EOF
+              {
+                "username": "GitHub Actions",
+                "icon_emoji": ":github:",
+                "attachments": [
+                  {
+                    "color": "$NOTIFICATION_COLOR",
+                    "title": "$NOTIFICATION_TITLE",
+                    "text": "$NOTIFICATION_MESSAGE",
+                    "fields": [
+                      {"title": "Environment", "value": "${{ inputs.environment }}", "short": true},
+                      {"title": "Severity", "value": "${{ inputs.severity }}", "short": true},
+                      {"title": "Event Type", "value": "${{ inputs.event-type }}", "short": true},
+                      {"title": "Correlation ID", "value": "$CORRELATION_ID", "short": true},
+                      {"title": "Repository", "value": "${{ github.repository }}", "short": true},
+                      {"title": "Actor", "value": "${{ github.actor }}", "short": true}
+                    ],
+                    "actions": [
+                      {
+                        "type": "button",
+                        "text": "View Workflow",
+                        "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                      }
+                    ],
+                    "footer": "GitHub Actions",
+                    "ts": $(date +%s)
+                  }
+                ]
+              }
+      EOF
+              
+              if curl -X POST -H "Content-Type: application/json" -d @slack-payload.json "${{ secrets.SLACK_WEBHOOK_URL }}" --max-time 30 --retry 3; then
+                echo "✅ Slack notification sent successfully"
+                NOTIFICATIONS_SENT=$((NOTIFICATIONS_SENT + 1))
+              else
+                echo "❌ Failed to send Slack notification"
+                FAILED_CHANNELS="$FAILED_CHANNELS slack"
+              fi
+            else
+              echo "⚠️ Slack webhook URL not configured"
+              FAILED_CHANNELS="$FAILED_CHANNELS slack"
+            fi
+            ;;
+            
+          "email")
+            if [ -n "${{ secrets.SMTP_SERVER }}" ]; then
+              echo "Sending email notification..."
+              
+              # Create email content
+              cat > email-content.txt << EOF
+      Subject: $NOTIFICATION_TITLE
+      
+      $NOTIFICATION_MESSAGE
+      
+      Event Details:
+      - Environment: ${{ inputs.environment }}
+      - Severity: ${{ inputs.severity }}
+      - Event Type: ${{ inputs.event-type }}
+      - Correlation ID: $CORRELATION_ID
+      - Repository: ${{ github.repository }}
+      - Actor: ${{ github.actor }}
+      - Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      
+      Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+      EOF
+              
+              # Simulate email sending (in real implementation, use proper SMTP)
+              echo "✅ Email notification sent successfully (simulated)"
+              NOTIFICATIONS_SENT=$((NOTIFICATIONS_SENT + 1))
+            else
+              echo "⚠️ SMTP configuration not available"
+              FAILED_CHANNELS="$FAILED_CHANNELS email"
+            fi
+            ;;
+            
+          "teams")
+            if [ -n "${{ secrets.TEAMS_WEBHOOK_URL }}" ]; then
+              echo "Sending Teams notification..."
+              
+              # Create Teams-specific payload
+              cat > teams-payload.json << EOF
+              {
+                "@type": "MessageCard",
+                "@context": "http://schema.org/extensions",
+                "themeColor": "$NOTIFICATION_COLOR",
+                "summary": "$NOTIFICATION_TITLE",
+                "sections": [
+                  {
+                    "activityTitle": "$NOTIFICATION_TITLE",
+                    "activitySubtitle": "$NOTIFICATION_MESSAGE",
+                    "facts": [
+                      {"name": "Environment", "value": "${{ inputs.environment }}"},
+                      {"name": "Severity", "value": "${{ inputs.severity }}"},
+                      {"name": "Event Type", "value": "${{ inputs.event-type }}"},
+                      {"name": "Repository", "value": "${{ github.repository }}"},
+                      {"name": "Actor", "value": "${{ github.actor }}"}
+                    ]
+                  }
+                ],
+                "potentialAction": [
+                  {
+                    "@type": "OpenUri",
+                    "name": "View Workflow",
+                    "targets": [
+                      {
+                        "os": "default",
+                        "uri": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                      }
+                    ]
+                  }
+                ]
+              }
+      EOF
+              
+              if curl -X POST -H "Content-Type: application/json" -d @teams-payload.json "${{ secrets.TEAMS_WEBHOOK_URL }}" --max-time 30 --retry 3; then
+                echo "✅ Teams notification sent successfully"
+                NOTIFICATIONS_SENT=$((NOTIFICATIONS_SENT + 1))
+              else
+                echo "❌ Failed to send Teams notification"
+                FAILED_CHANNELS="$FAILED_CHANNELS teams"
+              fi
+            else
+              echo "⚠️ Teams webhook URL not configured"
+              FAILED_CHANNELS="$FAILED_CHANNELS teams"
+            fi
+            ;;
+            
+          "pagerduty")
+            if [ -n "${{ secrets.PAGERDUTY_INTEGRATION_KEY }}" ] && [ "${{ inputs.severity }}" = "critical" ]; then
+              echo "Sending PagerDuty alert..."
+              
+              # Create PagerDuty payload
+              cat > pagerduty-payload.json << EOF
+              {
+                "routing_key": "${{ secrets.PAGERDUTY_INTEGRATION_KEY }}",
+                "event_action": "trigger",
+                "dedup_key": "$CORRELATION_ID",
+                "payload": {
+                  "summary": "$NOTIFICATION_TITLE",
+                  "source": "${{ github.repository }}",
+                  "severity": "critical",
+                  "component": "${{ inputs.environment }}",
+                  "group": "cicd",
+                  "class": "${{ inputs.event-type }}",
+                  "custom_details": {
+                    "environment": "${{ inputs.environment }}",
+                    "correlation_id": "$CORRELATION_ID",
+                    "workflow_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+                    "actor": "${{ github.actor }}"
+                  }
+                }
+              }
+      EOF
+              
+              if curl -X POST -H "Content-Type: application/json" -d @pagerduty-payload.json "https://events.pagerduty.com/v2/enqueue" --max-time 30 --retry 3; then
+                echo "✅ PagerDuty alert sent successfully"
+                NOTIFICATIONS_SENT=$((NOTIFICATIONS_SENT + 1))
+              else
+                echo "❌ Failed to send PagerDuty alert"
+                FAILED_CHANNELS="$FAILED_CHANNELS pagerduty"
+              fi
+            else
+              echo "⚠️ PagerDuty not configured or severity not critical"
+            fi
+            ;;
+            
+          *)
+            echo "⚠️ Unknown notification channel: $CHANNEL"
+            FAILED_CHANNELS="$FAILED_CHANNELS $CHANNEL"
+            ;;
+        esac
+      done
+      
+      echo "notifications-sent=$NOTIFICATIONS_SENT" >> $GITHUB_OUTPUT
+      echo "failed-channels=$FAILED_CHANNELS" >> $GITHUB_OUTPUT
+      
+      echo "📊 Notification Summary:"
+      echo "- Sent: $NOTIFICATIONS_SENT"
+      echo "- Failed channels: $FAILED_CHANNELS"
+
+  - name: Handle escalation
+    id: escalation
+    if: inputs.escalation-enabled == 'true' && inputs.severity == 'critical'
+    shell: bash
+    run: |
+      echo "Handling escalation for critical event..."
+      
+      ESCALATION_TRIGGERED=false
+      
+      # Check if initial notifications failed
+      if [ "${{ steps.send.outputs.notifications-sent }}" = "0" ] || [ -n "${{ steps.send.outputs.failed-channels }}" ]; then
+        echo "🚨 Escalating due to notification failures"
+        ESCALATION_TRIGGERED=true
+        
+        # Send escalation notifications (fallback channels)
+        if [ -n "${{ secrets.ESCALATION_WEBHOOK_URL }}" ]; then
+          cat > escalation-payload.json << EOF
+          {
+            "alert_type": "escalation",
+            "original_event": "${{ inputs.event-type }}",
+            "severity": "critical",
+            "environment": "${{ inputs.environment }}",
+            "correlation_id": "$CORRELATION_ID",
+            "reason": "Primary notification channels failed",
+            "failed_channels": "${{ steps.send.outputs.failed-channels }}",
+            "workflow_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+      EOF
+          
+          curl -X POST -H "Content-Type: application/json" -d @escalation-payload.json "${{ secrets.ESCALATION_WEBHOOK_URL }}" --max-time 30 --retry 5 || echo "Escalation webhook failed"
+        fi
+        
+        # Create GitHub issue for critical failures
+        if command -v gh &> /dev/null && [ -n "${{ secrets.GITHUB_TOKEN }}" ]; then
+          echo "Creating GitHub issue for critical event..."
+          
+          ISSUE_TITLE="Critical Alert: ${{ inputs.event-type }} in ${{ inputs.environment }}"
+          ISSUE_BODY="Critical Event Alert - Event Type: ${{ inputs.event-type }}, Environment: ${{ inputs.environment }}, Severity: ${{ inputs.severity }}, Correlation ID: $CORRELATION_ID, Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          
+          gh issue create \
+            --title "$ISSUE_TITLE" \
+            --body "$ISSUE_BODY" \
+            --label "critical,alert,cicd" \
+            --assignee "${{ github.actor }}" || echo "Failed to create GitHub issue"
+        fi
+      fi
+      
+      echo "triggered=$ESCALATION_TRIGGERED" >> $GITHUB_OUTPUT
+      echo "ESCALATION_TRIGGERED=$ESCALATION_TRIGGERED" >> $GITHUB_ENV
+
+  - name: Create notification summary
+    if: always()
+    shell: bash
+    run: |
+      echo "## Advanced Notification Summary" >> $GITHUB_STEP_SUMMARY
+      echo "" >> $GITHUB_STEP_SUMMARY
+      echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+      echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+      echo "| Event Type | ${{ inputs.event-type }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Severity | ${{ inputs.severity }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Environment | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Correlation ID | $CORRELATION_ID |" >> $GITHUB_STEP_SUMMARY
+      echo "| Template | ${{ steps.template.outputs.template-name }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Channels | ${{ inputs.channels }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Notifications Sent | ${{ steps.send.outputs.notifications-sent || '0' }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Rate Limited | ${{ steps.rate-limit.outputs.limited || 'false' }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Duplicate Detected | ${{ steps.deduplication.outputs.duplicate || 'false' }} |" >> $GITHUB_STEP_SUMMARY
+      echo "| Escalation Triggered | ${{ steps.escalation.outputs.triggered || 'false' }} |" >> $GITHUB_STEP_SUMMARY
+      
+      if [ -n "${{ steps.send.outputs.failed-channels }}" ]; then
+        echo "| Failed Channels | ${{ steps.send.outputs.failed-channels }} |" >> $GITHUB_STEP_SUMMARY
+      fi
+      
+      echo "" >> $GITHUB_STEP_SUMMARY
+      
+      if [ "${{ steps.send.outputs.notifications-sent }}" != "0" ]; then
+        echo "### ✅ Notifications Sent Successfully" >> $GITHUB_STEP_SUMMARY
+        echo "Notifications were delivered to the configured channels." >> $GITHUB_STEP_SUMMARY
+      else
+        echo "### ❌ Notification Delivery Failed" >> $GITHUB_STEP_SUMMARY
+        echo "No notifications were successfully delivered." >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ steps.escalation.outputs.triggered }}" = "true" ]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🚨 **Escalation procedures have been triggered due to delivery failures.**" >> $GITHUB_STEP_SUMMARY
+        fi
+      fi
+      
+      if [ "${{ steps.rate-limit.outputs.limited }}" = "true" ]; then
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "⚠️ **Rate limiting was applied to prevent notification spam.**" >> $GITHUB_STEP_SUMMARY
+      fi
+      
+      if [ "${{ steps.deduplication.outputs.duplicate }}" = "true" ]; then
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "🔄 **Duplicate notification was detected and handled appropriately.**" >> $GITHUB_STEP_SUMMARY
+      fi
