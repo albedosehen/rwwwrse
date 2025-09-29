@@ -500,11 +500,11 @@ type mockTarget struct {
 	headers        map[string]string
 }
 
-func (m *mockTarget) Name() string                 { return m.name }
-func (m *mockTarget) URL() string                  { return m.url }
-func (m *mockTarget) Timeout() time.Duration       { return m.timeout }
-func (m *mockTarget) ExpectedStatus() int          { return m.expectedStatus }
-func (m *mockTarget) Headers() map[string]string   { return m.headers }
+func (m *mockTarget) Name() string               { return m.name }
+func (m *mockTarget) URL() string                { return m.url }
+func (m *mockTarget) Timeout() time.Duration     { return m.timeout }
+func (m *mockTarget) ExpectedStatus() int        { return m.expectedStatus }
+func (m *mockTarget) Headers() map[string]string { return m.headers }
 
 // Helper function to create test targets
 func createTestTarget(name, url string, timeout time.Duration, expectedStatus int) HealthTarget {

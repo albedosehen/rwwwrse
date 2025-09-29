@@ -42,11 +42,11 @@ func TestConfigLoader_Load(t *testing.T) {
 		{
 			name: "override server configuration",
 			envVars: map[string]string{
-				"RWWWRSE_SERVER_HOST":       "localhost",
-				"RWWWRSE_SERVER_PORT":       "9090",
-				"RWWWRSE_SERVER_HTTPS_PORT": "9443",
-				"RWWWRSE_METRICS_PORT":      "8090", // Avoid port conflict
-				"RWWWRSE_TLS_AUTO_CERT":     "false",
+				"RWWWRSE_SERVER_HOST":                 "localhost",
+				"RWWWRSE_SERVER_PORT":                 "9090",
+				"RWWWRSE_SERVER_HTTPS_PORT":           "9443",
+				"RWWWRSE_METRICS_PORT":                "8090", // Avoid port conflict
+				"RWWWRSE_TLS_AUTO_CERT":               "false",
 				"RWWWRSE_BACKENDS_ROUTES_EXAMPLE_URL": "http://example.com",
 			},
 			wantErr: false,
@@ -59,11 +59,11 @@ func TestConfigLoader_Load(t *testing.T) {
 		{
 			name: "override TLS configuration",
 			envVars: map[string]string{
-				"RWWWRSE_TLS_ENABLED":   "false",
-				"RWWWRSE_TLS_AUTO_CERT": "false",
-				"RWWWRSE_TLS_CACHE_DIR": "/tmp/test-certs",
-				"RWWWRSE_TLS_EMAIL":     "test@example.com",
-				"RWWWRSE_TLS_STAGING":   "true",
+				"RWWWRSE_TLS_ENABLED":                 "false",
+				"RWWWRSE_TLS_AUTO_CERT":               "false",
+				"RWWWRSE_TLS_CACHE_DIR":               "/tmp/test-certs",
+				"RWWWRSE_TLS_EMAIL":                   "test@example.com",
+				"RWWWRSE_TLS_STAGING":                 "true",
 				"RWWWRSE_BACKENDS_ROUTES_EXAMPLE_URL": "http://example.com",
 			},
 			wantErr: false,
@@ -78,10 +78,10 @@ func TestConfigLoader_Load(t *testing.T) {
 		{
 			name: "override logging configuration",
 			envVars: map[string]string{
-				"RWWWRSE_LOGGING_LEVEL":  "debug",
-				"RWWWRSE_LOGGING_FORMAT": "text",
-				"RWWWRSE_LOGGING_OUTPUT": "stderr",
-				"RWWWRSE_TLS_AUTO_CERT":  "false",
+				"RWWWRSE_LOGGING_LEVEL":               "debug",
+				"RWWWRSE_LOGGING_FORMAT":              "text",
+				"RWWWRSE_LOGGING_OUTPUT":              "stderr",
+				"RWWWRSE_TLS_AUTO_CERT":               "false",
 				"RWWWRSE_BACKENDS_ROUTES_EXAMPLE_URL": "http://example.com",
 			},
 			wantErr: false,
@@ -94,10 +94,10 @@ func TestConfigLoader_Load(t *testing.T) {
 		{
 			name: "override metrics configuration",
 			envVars: map[string]string{
-				"RWWWRSE_METRICS_ENABLED": "false",
-				"RWWWRSE_METRICS_PORT":    "8090",
-				"RWWWRSE_METRICS_PATH":    "/stats",
-				"RWWWRSE_TLS_AUTO_CERT":   "false",
+				"RWWWRSE_METRICS_ENABLED":             "false",
+				"RWWWRSE_METRICS_PORT":                "8090",
+				"RWWWRSE_METRICS_PATH":                "/stats",
+				"RWWWRSE_TLS_AUTO_CERT":               "false",
 				"RWWWRSE_BACKENDS_ROUTES_EXAMPLE_URL": "http://example.com",
 			},
 			wantErr: false,
@@ -110,13 +110,13 @@ func TestConfigLoader_Load(t *testing.T) {
 		{
 			name: "override health configuration",
 			envVars: map[string]string{
-				"RWWWRSE_HEALTH_ENABLED":             "false",
-				"RWWWRSE_HEALTH_PATH":                "/status",
-				"RWWWRSE_HEALTH_TIMEOUT":             "10s",
-				"RWWWRSE_HEALTH_INTERVAL":            "60s",
-				"RWWWRSE_HEALTH_UNHEALTHY_THRESHOLD": "5",
-				"RWWWRSE_HEALTH_HEALTHY_THRESHOLD":   "1",
-				"RWWWRSE_TLS_AUTO_CERT":              "false",
+				"RWWWRSE_HEALTH_ENABLED":              "false",
+				"RWWWRSE_HEALTH_PATH":                 "/status",
+				"RWWWRSE_HEALTH_TIMEOUT":              "10s",
+				"RWWWRSE_HEALTH_INTERVAL":             "60s",
+				"RWWWRSE_HEALTH_UNHEALTHY_THRESHOLD":  "5",
+				"RWWWRSE_HEALTH_HEALTHY_THRESHOLD":    "1",
+				"RWWWRSE_TLS_AUTO_CERT":               "false",
 				"RWWWRSE_BACKENDS_ROUTES_EXAMPLE_URL": "http://example.com",
 			},
 			wantErr: false,
