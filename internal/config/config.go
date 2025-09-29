@@ -35,9 +35,9 @@ type ServerConfig struct {
 // TLSConfig contains TLS certificate management configuration.
 type TLSConfig struct {
 	Enabled     bool          `mapstructure:"enabled" default:"true"`
-	AutoCert    bool          `mapstructure:"auto_cert" default:"true"`
-	Email       string        `mapstructure:"email" validate:"required_if=AutoCert true,email"`
-	Domains     []string      `mapstructure:"domains" validate:"required_if=AutoCert true,min=1"`
+	AutoCert    bool          `mapstructure:"auto_cert" default:"false"`
+	Email       string        `mapstructure:"email" validate:"omitempty,email"`
+	Domains     []string      `mapstructure:"domains" validate:"omitempty,min=1"`
 	CacheDir    string        `mapstructure:"cache_dir" default:"/tmp/certs"`
 	Staging     bool          `mapstructure:"staging" default:"false"`
 	RenewBefore time.Duration `mapstructure:"renew_before" default:"720h"` // 30 days

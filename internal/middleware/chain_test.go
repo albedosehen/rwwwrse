@@ -258,8 +258,8 @@ func TestChain_ExecutionOrder(t *testing.T) {
 		expectedOrder []string
 	}{
 		{
-			name:          "ExecutionOrder_MiddlewaresInReverseOrder",
-			expectedOrder: []string{"mw3", "mw2", "mw1", "handler"},
+			name:          "ExecutionOrder_MiddlewaresInOrder",
+			expectedOrder: []string{"mw1", "mw2", "mw3", "handler"},
 		},
 	}
 

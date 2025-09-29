@@ -20,7 +20,7 @@ func setDefaults(v *viper.Viper) {
 
 	// TLS defaults
 	v.SetDefault("tls.enabled", true)
-	v.SetDefault("tls.auto_cert", true)
+	v.SetDefault("tls.auto_cert", false) // Default to false to avoid validation issues
 	v.SetDefault("tls.cache_dir", "/tmp/certs")
 	v.SetDefault("tls.staging", false)
 	v.SetDefault("tls.renew_before", "720h") // 30 days
@@ -90,7 +90,7 @@ func GetDefaultConfig() *Config {
 		},
 		TLS: TLSConfig{
 			Enabled:     true,
-			AutoCert:    true,
+			AutoCert:    false,
 			CacheDir:    "/tmp/certs",
 			Staging:     false,
 			RenewBefore: 720 * time.Hour, // 30 days

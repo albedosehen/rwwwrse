@@ -81,6 +81,9 @@ func NewLoggingMiddleware(
 	logger observability.Logger,
 	metrics observability.MetricsCollector,
 ) Middleware {
+	if logger == nil || metrics == nil {
+		return nil
+	}
 	return NewLoggingMiddlewareWithConfig(
 		DefaultLoggingConfig(),
 		logger,
@@ -94,6 +97,9 @@ func NewLoggingMiddlewareWithConfig(
 	logger observability.Logger,
 	metrics observability.MetricsCollector,
 ) Middleware {
+	if logger == nil || metrics == nil {
+		return nil
+	}
 	return &loggingMiddleware{
 		config:  config,
 		logger:  logger,

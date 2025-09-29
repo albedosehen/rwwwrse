@@ -34,6 +34,11 @@ func NewBackendTarget(name string, route config.BackendRoute) (HealthTarget, err
 	if err != nil {
 		return nil, fmt.Errorf("invalid backend URL: %w", err)
 	}
+	
+	// Validate that URL has scheme and host
+	if baseURL.Scheme == "" || baseURL.Host == "" {
+		return nil, fmt.Errorf("invalid backend URL: must have scheme and host")
+	}
 
 	// Construct health check URL
 	healthPath := route.HealthPath
@@ -74,8 +79,14 @@ func NewCustomTarget(name, targetURL string, timeout time.Duration, expectedStat
 	}
 
 	// Validate URL
-	if _, err := url.Parse(targetURL); err != nil {
+	parsedURL, err := url.Parse(targetURL)
+	if err != nil {
 		return nil, fmt.Errorf("invalid URL: %w", err)
+	}
+	
+	// Validate that URL has scheme and host
+	if parsedURL.Scheme == "" || parsedURL.Host == "" {
+		return nil, fmt.Errorf("invalid URL: must have scheme and host")
 	}
 
 	if timeout <= 0 {

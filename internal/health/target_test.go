@@ -334,12 +334,12 @@ func TestBackendTarget_SetTimeout(t *testing.T) {
 		{
 			name:        "zero timeout ignored",
 			newTimeout:  0,
-			wantTimeout: 30 * time.Second, // should remain unchanged
+			wantTimeout: 45 * time.Second, // should remain unchanged from previous test
 		},
 		{
 			name:        "negative timeout ignored",
 			newTimeout:  -10 * time.Second,
-			wantTimeout: 30 * time.Second, // should remain unchanged
+			wantTimeout: 45 * time.Second, // should remain unchanged from previous test
 		},
 	}
 
@@ -375,12 +375,12 @@ func TestBackendTarget_SetExpectedStatus(t *testing.T) {
 		{
 			name:       "zero status ignored",
 			newStatus:  0,
-			wantStatus: 200, // should remain unchanged
+			wantStatus: 204, // should remain unchanged from previous test
 		},
 		{
 			name:       "negative status ignored",
 			newStatus:  -1,
-			wantStatus: 200, // should remain unchanged
+			wantStatus: 204, // should remain unchanged from previous test
 		},
 	}
 

@@ -327,8 +327,14 @@ func TestHealthChecker_RegisterUnregisterTarget(t *testing.T) {
 	})
 
 	t.Run("register target with empty name", func(t *testing.T) {
-		// Arrange
-		emptyTarget := createTestTarget("", "http://localhost:8080", 5*time.Second, 200)
+		// Arrange - create a mock target that returns empty name
+		emptyTarget := &mockTarget{
+			name:           "",
+			url:            "http://localhost:8080",
+			timeout:        5 * time.Second,
+			expectedStatus: 200,
+			headers:        make(map[string]string),
+		}
 
 		// Act
 		err := hc.RegisterTarget(emptyTarget)
@@ -484,6 +490,21 @@ func TestHealthChecker_MonitoringIntegration(t *testing.T) {
 	testingutils.AssertTrue(t, status.Healthy)
 	testingutils.AssertTrue(t, status.ConsecutiveSuccesses > 0)
 }
+
+// mockTarget implements HealthTarget for testing
+type mockTarget struct {
+	name           string
+	url            string
+	timeout        time.Duration
+	expectedStatus int
+	headers        map[string]string
+}
+
+func (m *mockTarget) Name() string                 { return m.name }
+func (m *mockTarget) URL() string                  { return m.url }
+func (m *mockTarget) Timeout() time.Duration       { return m.timeout }
+func (m *mockTarget) ExpectedStatus() int          { return m.expectedStatus }
+func (m *mockTarget) Headers() map[string]string   { return m.headers }
 
 // Helper function to create test targets
 func createTestTarget(name, url string, timeout time.Duration, expectedStatus int) HealthTarget {
