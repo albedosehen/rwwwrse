@@ -103,7 +103,8 @@ func TestNewBackendImpl(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			if tt.logger != nil {
+			if tt.logger != nil && !tt.expectErr {
+				// Only expect logging for successful backend creation
 				mockLogger := tt.logger.(*mockRouterLogger)
 				mockLogger.On("Info", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 			}
@@ -130,7 +131,7 @@ func TestNewBackendImpl(t *testing.T) {
 				assert.True(t, backend.IsHealthy(context.Background()))
 			}
 
-			if tt.logger != nil {
+			if tt.logger != nil && !tt.expectErr {
 				mockLogger := tt.logger.(*mockRouterLogger)
 				mockLogger.AssertExpectations(t)
 			}

@@ -53,6 +53,15 @@ func NewBackendImpl(
 			err,
 		)
 	}
+	
+	// Validate that URL has scheme and host
+	if backendURL.Scheme == "" || backendURL.Host == "" {
+		return nil, proxyerrors.NewConfigError(
+			proxyerrors.ErrCodeConfigInvalid,
+			"backend_url",
+			nil,
+		)
+	}
 
 	if logger == nil {
 		return nil, proxyerrors.NewConfigError(
