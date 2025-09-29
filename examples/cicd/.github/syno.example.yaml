@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   build-and-deploy:
-    runs-on: [ self-hosted, synology ]
+    runs-on: [self-hosted, synology, ds1520]
     environment: syno
     timeout-minutes: 30
     env:

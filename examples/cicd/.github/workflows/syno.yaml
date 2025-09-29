@@ -137,7 +137,7 @@ jobs:
   # Main deployment job
   deploy-synology:
     name: Deploy to Synology NAS
-    runs-on: [self-hosted, synology]
+    runs-on: [self-hosted, synology, ds1520]
     needs: [load-synology-config, pre-deployment]
     timeout-minutes: 30
     outputs:
