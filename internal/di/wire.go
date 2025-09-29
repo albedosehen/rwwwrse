@@ -75,7 +75,38 @@ var providerSet = wire.NewSet(
 // InitializeApplication creates a fully wired application instance.
 // This function will be implemented by Wire code generation.
 func InitializeApplication(ctx context.Context) (*Application, error) {
-	wire.Build(providerSet)
+	wire.Build(
+		// Configuration providers
+		config.ProvideConfig,
+		config.ProvideLoggingConfig,
+		config.ProvideMetricsConfig,
+		config.ProvideBackendsConfig,
+
+		// Observability providers
+		observability.ProvideLogger,
+		observability.ProvideMetricsCollector,
+
+		// Proxy providers
+		proxy.ProvideRouter,
+		proxy.ProvideBackendManager,
+		proxy.ProvideProxyHandler,
+		proxy.ProvideConnectionPool,
+
+		// Server provider set
+		server.ProviderSet,
+
+		// TLS provider set
+		tls.ProviderSet,
+
+		// Middleware provider set
+		middleware.ProviderSet,
+
+		// Health provider set
+		health.ProviderSet,
+
+		// Application provider
+		ProvideApplication,
+	)
 	return nil, nil
 }
 

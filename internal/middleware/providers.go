@@ -15,13 +15,8 @@ import (
 
 // ProviderSet is a Wire provider set for middleware components.
 var ProviderSet = wire.NewSet(
-	NewMiddlewareChain,
-	NewDefaultRecoveryMiddleware,
-	NewDefaultLoggingMiddleware,
-	NewDefaultCORSMiddleware,
-	NewDefaultSecurityHeadersMiddleware,
-	NewDefaultRateLimitMiddleware,
 	NewDefaultTokenBucketRateLimiter,
+	CreateCompleteMiddlewareChain,
 )
 
 // NewMiddlewareChain creates a new middleware chain.

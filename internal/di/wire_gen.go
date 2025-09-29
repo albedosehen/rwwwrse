@@ -10,8 +10,12 @@ import (
 	"context"
 	"fmt"
 	"github.com/albedosehen/rwwwrse/internal/config"
+	"github.com/albedosehen/rwwwrse/internal/health"
+	"github.com/albedosehen/rwwwrse/internal/middleware"
 	"github.com/albedosehen/rwwwrse/internal/observability"
 	"github.com/albedosehen/rwwwrse/internal/proxy"
+	"github.com/albedosehen/rwwwrse/internal/server"
+	"github.com/albedosehen/rwwwrse/internal/tls"
 	"github.com/google/wire"
 	"sync"
 	"time"
@@ -43,7 +47,22 @@ func InitializeApplication(ctx context.Context) (*Application, error) {
 	router := proxy.ProvideRouter(backendsConfig, logger, metricsCollector)
 	backendManager := proxy.ProvideBackendManager(backendsConfig, logger, metricsCollector)
 	proxyHandler := proxy.ProvideProxyHandler(router, logger, metricsCollector)
-	application := ProvideApplication(configConfig, logger, metricsCollector, router, backendManager, proxyHandler)
+	connectionPool := proxy.ProvideConnectionPool(backendsConfig, logger, metricsCollector)
+	serverManager := server.NewServerManager(logger)
+	manager, err := tls.NewTLSManager(configConfig, logger, metricsCollector)
+	if err != nil {
+		return nil, err
+	}
+	chain := middleware.CreateCompleteMiddlewareChain(configConfig, logger, metricsCollector)
+	healthConfig := health.ProvideHealthConfig(configConfig)
+	healthChecker := health.NewHealthChecker(healthConfig, logger, metricsCollector)
+	healthAggregator := health.NewHealthAggregator(healthChecker, logger, metricsCollector)
+	healthReporter := health.NewHealthReporter(healthAggregator, logger, configConfig)
+	circuitBreakerConfig := health.ProvideCircuitBreakerConfig(healthConfig)
+	circuitBreaker := health.NewCircuitBreaker(circuitBreakerConfig, logger, metricsCollector)
+	healthTargetFactory := health.NewHealthTargetFactory(healthChecker, circuitBreaker, logger)
+	healthSystem := health.NewHealthSystem(healthChecker, healthAggregator, healthReporter, healthTargetFactory)
+	application := ProvideApplication(configConfig, logger, metricsCollector, router, backendManager, proxyHandler, connectionPool, serverManager, manager, chain, healthSystem)
 	return application, nil
 }
 
@@ -58,7 +77,22 @@ func InitializeApplicationWithConfig(ctx context.Context, cfg *config.Config) (*
 	router := proxy.ProvideRouter(backendsConfig, logger, metricsCollector)
 	backendManager := proxy.ProvideBackendManager(backendsConfig, logger, metricsCollector)
 	proxyHandler := proxy.ProvideProxyHandler(router, logger, metricsCollector)
-	application := ProvideApplication(cfg, logger, metricsCollector, router, backendManager, proxyHandler)
+	connectionPool := proxy.ProvideConnectionPool(backendsConfig, logger, metricsCollector)
+	serverManager := server.NewServerManager(logger)
+	manager, err := tls.NewTLSManager(cfg, logger, metricsCollector)
+	if err != nil {
+		return nil, err
+	}
+	chain := middleware.CreateCompleteMiddlewareChain(cfg, logger, metricsCollector)
+	healthConfig := health.ProvideHealthConfig(cfg)
+	healthChecker := health.NewHealthChecker(healthConfig, logger, metricsCollector)
+	healthAggregator := health.NewHealthAggregator(healthChecker, logger, metricsCollector)
+	healthReporter := health.NewHealthReporter(healthAggregator, logger, cfg)
+	circuitBreakerConfig := health.ProvideCircuitBreakerConfig(healthConfig)
+	circuitBreaker := health.NewCircuitBreaker(circuitBreakerConfig, logger, metricsCollector)
+	healthTargetFactory := health.NewHealthTargetFactory(healthChecker, circuitBreaker, logger)
+	healthSystem := health.NewHealthSystem(healthChecker, healthAggregator, healthReporter, healthTargetFactory)
+	application := ProvideApplication(cfg, logger, metricsCollector, router, backendManager, proxyHandler, connectionPool, serverManager, manager, chain, healthSystem)
 	return application, nil
 }
 
@@ -66,19 +100,24 @@ func InitializeApplicationWithConfig(ctx context.Context, cfg *config.Config) (*
 
 // Application represents the complete wired application.
 type Application struct {
-	Config     *config.Config
-	Logger     observability.Logger
-	Metrics    observability.MetricsCollector
-	Router     proxy.Router
-	BackendMgr proxy.BackendManager
-	Handler    proxy.ProxyHandler
+	Config          *config.Config
+	Logger          observability.Logger
+	Metrics         observability.MetricsCollector
+	Router          proxy.Router
+	BackendMgr      proxy.BackendManager
+	Handler         proxy.ProxyHandler
+	ConnectionPool  proxy.ConnectionPool
+	ServerManager   server.ServerManager
+	TLSManager      tls.Manager
+	MiddlewareChain middleware.Chain
+	HealthSystem    *health.HealthSystem
 
 	mu      sync.RWMutex
 	running bool
 }
 
-// providerSet defines the complete set of providers for dependency injection.
-var providerSet = wire.NewSet(config.ProvideConfig, config.ProvideLoggingConfig, config.ProvideMetricsConfig, config.ProvideBackendsConfig, observability.ProvideLogger, observability.ProvideMetricsCollector, proxy.ProvideRouter, proxy.ProvideBackendManager, proxy.ProvideProxyHandler, ProvideApplication)
+// providerSet defines the complete set of providers for dependency icnjection.
+var providerSet = wire.NewSet(config.ProvideConfig, config.ProvideLoggingConfig, config.ProvideMetricsConfig, config.ProvideBackendsConfig, observability.ProvideLogger, observability.ProvideMetricsCollector, proxy.ProvideRouter, proxy.ProvideBackendManager, proxy.ProvideProxyHandler, proxy.ProvideConnectionPool, server.ProviderSet, tls.ProviderSet, middleware.ProviderSet, health.ProviderSet, ProvideApplication)
 
 // ProvideApplication creates the main application instance.
 func ProvideApplication(
@@ -88,14 +127,24 @@ func ProvideApplication(
 	router proxy.Router,
 	backendMgr proxy.BackendManager,
 	handler proxy.ProxyHandler,
+	connectionPool proxy.ConnectionPool,
+	serverManager server.ServerManager,
+	tlsManager tls.Manager,
+	middlewareChain middleware.Chain,
+	healthSystem *health.HealthSystem,
 ) *Application {
 	return &Application{
-		Config:     cfg,
-		Logger:     logger,
-		Metrics:    metrics,
-		Router:     router,
-		BackendMgr: backendMgr,
-		Handler:    handler,
+		Config:          cfg,
+		Logger:          logger,
+		Metrics:         metrics,
+		Router:          router,
+		BackendMgr:      backendMgr,
+		Handler:         handler,
+		ConnectionPool:  connectionPool,
+		ServerManager:   serverManager,
+		TLSManager:      tlsManager,
+		MiddlewareChain: middlewareChain,
+		HealthSystem:    healthSystem,
 	}
 }
 

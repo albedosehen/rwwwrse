@@ -24,7 +24,7 @@ var ProviderSet = wire.NewSet(
 )
 
 // ProvideHealthConfig extracts health configuration from the main config.
-func ProvideHealthConfig(cfg config.Config) config.HealthConfig {
+func ProvideHealthConfig(cfg *config.Config) config.HealthConfig {
 	return cfg.Health
 }
 
@@ -47,11 +47,11 @@ func NewHealthAggregator(checker HealthChecker, logger observability.Logger, met
 }
 
 // NewHealthReporter creates a new health reporter instance.
-func NewHealthReporter(aggregator HealthAggregator, logger observability.Logger, cfg config.Config) HealthReporter {
+func NewHealthReporter(aggregator HealthAggregator, logger observability.Logger, cfg *config.Config) HealthReporter {
 	return &simpleHealthReporter{
 		aggregator: aggregator,
 		logger:     logger,
-		config:     cfg,
+		config:     *cfg,
 		startTime:  time.Now(),
 	}
 }
@@ -123,7 +123,7 @@ type HealthMonitorConfig struct {
 }
 
 // NewHealthMonitorConfig creates health monitor configuration from the main config.
-func NewHealthMonitorConfig(cfg config.Config) HealthMonitorConfig {
+func NewHealthMonitorConfig(cfg *config.Config) HealthMonitorConfig {
 	return HealthMonitorConfig{
 		Enabled:            cfg.Health.Enabled,
 		Timeout:            cfg.Health.Timeout,
